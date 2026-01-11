@@ -1,0 +1,338 @@
+#!/bin/bash
+# Test suite for Ralph runner with Cursor support
+# Tests run without requiring real Amp or real Cursor (use stub binaries)
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEST_DIR="$SCRIPT_DIR/test-tmp"
+RALPH_SCRIPT="$SCRIPT_DIR/ralph.sh"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Setup test environment
+setup_test_env() {
+  mkdir -p "$TEST_DIR"
+  cd "$TEST_DIR"
+  
+  # Create stub binaries
+  mkdir -p bin
+  export PATH="$TEST_DIR/bin:$PATH"
+  
+  # Create stub amp binary
+  cat > bin/amp << 'EOF'
+#!/bin/bash
+# Stub amp binary for testing
+echo "Stub amp executed with args: $@"
+if [ -t 0 ]; then
+  echo "Stub amp: stdin is a TTY"
+else
+  echo "Stub amp: stdin is not a TTY"
+fi
+# Simulate output
+echo "Some amp output"
+echo "<promise>COMPLETE</promise>"
+EOF
+  chmod +x bin/amp
+  
+  # Create stub cursor binary
+  cat > bin/cursor << 'EOF'
+#!/bin/bash
+# Stub cursor binary for testing
+echo "Stub cursor executed with args: $@"
+if [ -t 0 ]; then
+  echo "Stub cursor: stdin is a TTY"
+else
+  echo "Stub cursor: stdin is not a TTY"
+fi
+# Check for required flags
+if [[ "$*" == *"--model auto"* ]] && [[ "$*" == *"--print"* ]] && [[ "$*" == *"--force"* ]] && [[ "$*" == *"--approve-mcps"* ]]; then
+  echo "Stub cursor: all required flags present"
+else
+  echo "Stub cursor: WARNING - missing required flags" >&2
+fi
+# Simulate output (no COMPLETE by default)
+echo "Some cursor output"
+EOF
+  chmod +x bin/cursor
+  
+  # Create test prd.json
+  cat > prd.json << 'EOF'
+{
+  "project": "TestProject",
+  "branchName": "ralph/test",
+  "description": "Test feature",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Test story",
+      "description": "Test description",
+      "acceptanceCriteria": ["Test criterion"],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
+EOF
+  
+  # Create test progress.txt
+  echo "# Ralph Progress Log" > progress.txt
+  echo "Started: $(date)" >> progress.txt
+  echo "---" >> progress.txt
+}
+
+# Cleanup test environment
+cleanup_test_env() {
+  cd "$SCRIPT_DIR"
+  rm -rf "$TEST_DIR"
+}
+
+# Test helper: capture command output
+test_command() {
+  local test_name="$1"
+  local command="$2"
+  local expected_pattern="$3"
+  
+  echo -n "Testing: $test_name... "
+  
+  if eval "$command" 2>&1 | grep -q "$expected_pattern"; then
+    echo -e "${GREEN}PASS${NC}"
+    return 0
+  else
+    echo -e "${RED}FAIL${NC}"
+    echo "  Command: $command"
+    echo "  Expected pattern: $expected_pattern"
+    return 1
+  fi
+}
+
+# Test 1: Default worker is Amp when no worker is specified
+test_default_worker_amp() {
+  setup_test_env
+  
+  # Run ralph with no worker specified
+  OUTPUT=$(bash "$RALPH_SCRIPT" 1 2>&1 || true)
+  
+  if echo "$OUTPUT" | grep -q "Stub amp executed"; then
+    echo -e "${GREEN}PASS${NC}: Default worker is Amp"
+  else
+    echo -e "${RED}FAIL${NC}: Default worker is not Amp"
+    echo "Output: $OUTPUT"
+    cleanup_test_env
+    return 1
+  fi
+  
+  cleanup_test_env
+}
+
+# Test 2: Cursor worker is used only when explicitly selected
+test_cursor_worker_explicit() {
+  setup_test_env
+  
+  # Test with --worker cursor
+  OUTPUT=$(bash "$RALPH_SCRIPT" 1 --worker cursor 2>&1 || true)
+  
+  if echo "$OUTPUT" | grep -q "Stub cursor executed"; then
+    echo -e "${GREEN}PASS${NC}: Cursor worker used when explicitly selected"
+  else
+    echo -e "${RED}FAIL${NC}: Cursor worker not used when selected"
+    echo "Output: $OUTPUT"
+    cleanup_test_env
+    return 1
+  fi
+  
+  # Test with RALPH_WORKER env var
+  OUTPUT=$(RALPH_WORKER=cursor bash "$RALPH_SCRIPT" 1 2>&1 || true)
+  
+  if echo "$OUTPUT" | grep -q "Stub cursor executed"; then
+    echo -e "${GREEN}PASS${NC}: Cursor worker used with RALPH_WORKER env var"
+  else
+    echo -e "${RED}FAIL${NC}: Cursor worker not used with RALPH_WORKER"
+    echo "Output: $OUTPUT"
+    cleanup_test_env
+    return 1
+  fi
+  
+  cleanup_test_env
+}
+
+# Test 3: Cursor command includes required flags
+test_cursor_invocation_flags() {
+  setup_test_env
+  
+  OUTPUT=$(bash "$RALPH_SCRIPT" 1 --worker cursor 2>&1 || true)
+  
+  if echo "$OUTPUT" | grep -q "all required flags present"; then
+    echo -e "${GREEN}PASS${NC}: Cursor command includes all required flags"
+  else
+    echo -e "${RED}FAIL${NC}: Cursor command missing required flags"
+    echo "Output: $OUTPUT"
+    cleanup_test_env
+    return 1
+  fi
+  
+  cleanup_test_env
+}
+
+# Test 4: Cursor invocation uses normal spawn (no PTY)
+test_cursor_no_pty() {
+  setup_test_env
+  
+  OUTPUT=$(bash "$RALPH_SCRIPT" 1 --worker cursor 2>&1 || true)
+  
+  if echo "$OUTPUT" | grep -q "stdin is not a TTY"; then
+    echo -e "${GREEN}PASS${NC}: Cursor invocation uses normal spawn (no PTY)"
+  else
+    echo -e "${RED}FAIL${NC}: Cursor invocation may be using PTY"
+    echo "Output: $OUTPUT"
+    cleanup_test_env
+    return 1
+  fi
+  
+  cleanup_test_env
+}
+
+# Test 5: Stop condition - COMPLETE signal exits loop
+test_stop_condition_complete() {
+  setup_test_env
+  
+  # Modify stub amp to output COMPLETE
+  cat > bin/amp << 'EOF'
+#!/bin/bash
+echo "Iteration output"
+echo "<promise>COMPLETE</promise>"
+EOF
+  chmod +x bin/amp
+  
+  OUTPUT=$(bash "$RALPH_SCRIPT" 10 2>&1 || true)
+  
+  if echo "$OUTPUT" | grep -q "Ralph completed all tasks"; then
+    echo -e "${GREEN}PASS${NC}: Loop exits on COMPLETE signal"
+  else
+    echo -e "${RED}FAIL${NC}: Loop does not exit on COMPLETE signal"
+    echo "Output: $OUTPUT"
+    cleanup_test_env
+    return 1
+  fi
+  
+  cleanup_test_env
+}
+
+# Test 6: Stop condition - no COMPLETE continues loop
+test_stop_condition_no_complete() {
+  setup_test_env
+  
+  # Modify stub amp to NOT output COMPLETE
+  cat > bin/amp << 'EOF'
+#!/bin/bash
+echo "Iteration output without COMPLETE"
+EOF
+  chmod +x bin/amp
+  
+  OUTPUT=$(bash "$RALPH_SCRIPT" 2 2>&1 || true)
+  
+  if echo "$OUTPUT" | grep -q "Iteration 2 of 2"; then
+    echo -e "${GREEN}PASS${NC}: Loop continues when no COMPLETE signal"
+  else
+    echo -e "${RED}FAIL${NC}: Loop does not continue without COMPLETE"
+    echo "Output: $OUTPUT"
+    cleanup_test_env
+    return 1
+  fi
+  
+  cleanup_test_env
+}
+
+# Test 7: progress.txt is append-only
+test_progress_append_only() {
+  setup_test_env
+  
+  ORIGINAL_CONTENT=$(cat progress.txt)
+  
+  # Run one iteration
+  bash "$RALPH_SCRIPT" 1 >/dev/null 2>&1 || true
+  
+  NEW_CONTENT=$(cat progress.txt)
+  
+  if [[ "$NEW_CONTENT" == "$ORIGINAL_CONTENT"* ]]; then
+    echo -e "${GREEN}PASS${NC}: progress.txt is append-only"
+  else
+    echo -e "${RED}FAIL${NC}: progress.txt was overwritten"
+    echo "Original: $ORIGINAL_CONTENT"
+    echo "New: $NEW_CONTENT"
+    cleanup_test_env
+    return 1
+  fi
+  
+  cleanup_test_env
+}
+
+# Test 8: prd.json parsing failures don't crash runner
+test_prd_json_parsing_failure() {
+  setup_test_env
+  
+  # Create invalid prd.json
+  echo "invalid json content" > prd.json
+  
+  # Runner should not crash
+  if bash "$RALPH_SCRIPT" 1 >/dev/null 2>&1; then
+    echo -e "${GREEN}PASS${NC}: Runner handles invalid prd.json gracefully"
+  else
+    echo -e "${RED}FAIL${NC}: Runner crashes on invalid prd.json"
+    cleanup_test_env
+    return 1
+  fi
+  
+  # Test missing prd.json
+  rm -f prd.json
+  
+  if bash "$RALPH_SCRIPT" 1 >/dev/null 2>&1; then
+    echo -e "${GREEN}PASS${NC}: Runner handles missing prd.json gracefully"
+  else
+    echo -e "${RED}FAIL${NC}: Runner crashes on missing prd.json"
+    cleanup_test_env
+    return 1
+  fi
+  
+  cleanup_test_env
+}
+
+# Run all tests
+main() {
+  echo "Running Ralph test suite..."
+  echo ""
+  
+  local tests_passed=0
+  local tests_failed=0
+  
+  if test_default_worker_amp; then ((tests_passed+=1)); else ((tests_failed+=1)); fi
+  if test_cursor_worker_explicit; then ((tests_passed+=1)); else ((tests_failed+=1)); fi
+  if test_cursor_invocation_flags; then ((tests_passed+=1)); else ((tests_failed+=1)); fi
+  if test_cursor_no_pty; then ((tests_passed+=1)); else ((tests_failed+=1)); fi
+  if test_stop_condition_complete; then ((tests_passed+=1)); else ((tests_failed+=1)); fi
+  if test_stop_condition_no_complete; then ((tests_passed+=1)); else ((tests_failed+=1)); fi
+  if test_progress_append_only; then ((tests_passed+=1)); else ((tests_failed+=1)); fi
+  if test_prd_json_parsing_failure; then ((tests_passed+=1)); else ((tests_failed+=1)); fi
+  
+  echo ""
+  echo "========================================="
+  echo "Tests passed: $tests_passed"
+  echo "Tests failed: $tests_failed"
+  echo "========================================="
+  
+  if [ $tests_failed -eq 0 ]; then
+    echo -e "${GREEN}All tests passed!${NC}"
+    exit 0
+  else
+    echo -e "${RED}Some tests failed!${NC}"
+    exit 1
+  fi
+}
+
+# Run tests
+main
