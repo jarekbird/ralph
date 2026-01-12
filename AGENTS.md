@@ -16,17 +16,13 @@ cd flowchart && npm run build
 # Run Ralph (from your project that has scripts/ralph/prd.json)
 ./scripts/ralph/ralph.sh [max_iterations] [--worker amp|cursor] [--cursor-timeout SECONDS]
 
-# Or use the root wrapper (if present)
-./ralph.sh [max_iterations] [--worker amp|cursor] [--cursor-timeout SECONDS]
-
 # Convert PRD markdown to prd.json using Cursor CLI
 ./scripts/ralph/cursor/convert-to-prd-json.sh tasks/prd-[feature-name].md [--model MODEL] [--out OUT_JSON]
 ```
 
 ## Key Files
 
-- `ralph.sh` - Root wrapper entrypoint (delegates to `scripts/ralph/ralph.sh`)
-- `scripts/ralph/ralph.sh` - The canonical bash loop (Amp + optional Cursor worker)
+- `scripts/ralph/ralph.sh` - The bash loop (Amp + optional Cursor worker)
 - `scripts/ralph/amp/prompt.md` - Instructions given to each Amp iteration
 - `scripts/ralph/cursor/prompt.cursor.md` - Instructions given to each Cursor iteration
 - `scripts/ralph/cursor/convert-to-prd-json.sh` - Convert PRD markdown → `scripts/ralph/prd.json` via Cursor CLI
