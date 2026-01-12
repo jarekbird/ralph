@@ -10,11 +10,17 @@ set -e
 MAX_ITERATIONS=10
 WORKER="${RALPH_WORKER:-amp}"
 CURSOR_TIMEOUT="${RALPH_CURSOR_TIMEOUT:-1800}"  # Default: 30 minutes (in seconds)
+CURSOR_BIN="${RALPH_CURSOR_BIN:-cursor-agent}"
+CURSOR_MODEL="${RALPH_CURSOR_MODEL:-auto}"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --worker)
       WORKER="$2"
+      shift 2
+      ;;
+    --model|--cursor-model)
+      CURSOR_MODEL="$2"
       shift 2
       ;;
     --cursor-timeout)
@@ -35,7 +41,24 @@ if [[ "$WORKER" != "amp" && "$WORKER" != "cursor" ]]; then
   echo "Error: Worker must be 'amp' or 'cursor' (got: $WORKER)" >&2
   exit 1
 fi
+
+# Validate Cursor model selection (only when cursor worker is used)
+if [[ "$WORKER" == "cursor" && -z "$CURSOR_MODEL" ]]; then
+  echo "Error: --model/--cursor-model cannot be empty when using --worker cursor" >&2
+  exit 1
+fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Load environment variables from .env file if it exists (in repo root, parent of scripts/)
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+if [ -f "$REPO_ROOT/.env" ]; then
+  # Temporarily disable exit on error to allow .env sourcing
+  set +e
+  # Use set -a to auto-export all variables, source .env, then restore
+  set -a
+  source "$REPO_ROOT/.env" 2>/dev/null
+  set +a
+  set -e
+fi
 PRD_FILE="$SCRIPT_DIR/prd.json"
 PROGRESS_FILE="$SCRIPT_DIR/progress.txt"
 ARCHIVE_DIR="$SCRIPT_DIR/archive"
@@ -83,6 +106,16 @@ fi
 
 echo "Starting Ralph - Max iterations: $MAX_ITERATIONS"
 echo "Worker: $WORKER"
+if [[ "$WORKER" == "cursor" ]]; then
+  echo "Cursor model: $CURSOR_MODEL"
+  if [[ -z "${CURSOR_API_KEY:-}" ]]; then
+    echo "Warning: CURSOR_API_KEY environment variable is not set."
+    echo "  cursor-agent requires authentication. Set CURSOR_API_KEY or run 'cursor-agent login'"
+    echo "  Example: export CURSOR_API_KEY=your-api-key-here"
+  else
+    echo "Cursor API key: ${CURSOR_API_KEY:0:10}... (set)"
+  fi
+fi
 
 for i in $(seq 1 $MAX_ITERATIONS); do
   echo ""
@@ -101,20 +134,20 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     # Always uses normal spawn (never PTY), stdin is closed (no interactive prompts)
     PROMPT_FILE="$SCRIPT_DIR/cursor/prompt.cursor.md"
     PROMPT_TEXT=$(cat "$PROMPT_FILE")
-    # Execute cursor with: --model auto --print --force --approve-mcps
+    # Execute cursor with: --model "$CURSOR_MODEL" --print --force --approve-mcps
     # stdin is automatically closed when using command substitution in bash
     # Per-iteration hard timeout (wall-clock) - kills process if exceeded
     # Note: MCP cleanup is handled by Cursor CLI itself when processes exit normally
     # If MCP processes are orphaned, they may need manual cleanup (outside scope of this script)
     if command -v timeout >/dev/null 2>&1; then
-      OUTPUT=$(timeout "$CURSOR_TIMEOUT" cursor --model auto --print --force --approve-mcps "$PROMPT_TEXT" </dev/null 2>&1 | tee /dev/stderr) || true
+      OUTPUT=$(timeout "$CURSOR_TIMEOUT" "$CURSOR_BIN" --model "$CURSOR_MODEL" --print --force --approve-mcps "$PROMPT_TEXT" </dev/null 2>&1 | tee /dev/stderr) || true
       TIMEOUT_EXIT=$?
       if [[ $TIMEOUT_EXIT -eq 124 ]]; then
         echo "Warning: Cursor iteration timed out after ${CURSOR_TIMEOUT} seconds" >&2
       fi
     else
       # Fallback if timeout command is not available
-      OUTPUT=$(cursor --model auto --print --force --approve-mcps "$PROMPT_TEXT" </dev/null 2>&1 | tee /dev/stderr) || true
+      OUTPUT=$("$CURSOR_BIN" --model "$CURSOR_MODEL" --print --force --approve-mcps "$PROMPT_TEXT" </dev/null 2>&1 | tee /dev/stderr) || true
     fi
   fi
   

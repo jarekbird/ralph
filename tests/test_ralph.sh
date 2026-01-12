@@ -90,6 +90,14 @@ echo "Some cursor output"
 EOF
   chmod +x "$project_dir/bin/cursor"
 
+  # Create stub cursor-agent binary for testing (some templates default to cursor-agent)
+  cat > "$project_dir/bin/cursor-agent" << 'EOF'
+#!/bin/bash
+# Stub cursor-agent binary for testing (proxy to stub cursor behavior)
+exec cursor "$@"
+EOF
+  chmod +x "$project_dir/bin/cursor-agent"
+
   # Create test prd.json
   cat > "$RALPH_WORK_DIR/prd.json" << 'EOF'
 {
