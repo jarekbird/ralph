@@ -6,14 +6,28 @@ You are an autonomous coding agent working on a software project using Cursor.
 
 1. Read the PRD at `prd.json` (in the same directory as this file)
 2. Read the progress log at `progress.txt` (check Codebase Patterns section first)
-3. Check you're on the correct branch from PRD `branchName`. If not, check it out or create from main.
-4. Pick the **highest priority** user story where `passes: false`
-5. Implement that single user story
-6. Run quality checks (e.g., typecheck, lint, test - use whatever your project requires)
-7. Update AGENTS.md files if you discover reusable patterns (see below)
-8. If checks pass, commit ALL changes with message: `feat: [Story ID] - [Story Title]`
-9. Update the PRD to set `passes: true` for the completed story
-10. Append your progress to `progress.txt`
+3. Determine which repository/repositories this story touches. If multiple repos are involved, you MUST perform ALL git operations in EACH touched repo (see Multi-Repository Work below).
+4. Check you're on the correct branch from PRD `branchName` in every touched repo. If not, check it out or create from main. You may assume the branch name is the same across all repos.
+5. Pick the **highest priority** user story where `passes: false`
+6. Implement that single user story
+7. Run quality checks (e.g., typecheck, lint, test - use whatever your project requires) in each touched repo as appropriate
+8. Update AGENTS.md files if you discover reusable patterns (see below)
+9. If checks pass, commit changes in EACH touched repo that has changes with message: `feat: [Story ID] - [Story Title]` (do not create empty commits). If your workflow expects pushes, push the branch in each touched repo.
+10. Update the PRD to set `passes: true` for the completed story
+11. Append your progress to `progress.txt`
+
+## Multi-Repository Work
+
+Some stories may operate across multiple repositories. When that happens:
+
+- Treat the PRD `branchName` as a shared branch name across all touched repos.
+- Before implementing, explicitly list the touched repos (paths) you will operate in.
+- For EACH touched repo, ensure:
+  - You are on the correct branch (checkout/create from main if needed)
+  - You run the relevant checks in that repo
+  - You commit changes in that repo (same commit message format)
+  - You do not forget any repo that you modified (no “dirty” repo left behind)
+  - If pushes are part of the workflow, push in each touched repo
 
 ## Progress Report Format
 
@@ -22,6 +36,7 @@ APPEND to progress.txt (never replace, always append):
 ## [Date/Time] - [Story ID]
 - What was implemented
 - Files changed
+- Repositories touched (paths)
 - **Learnings for future iterations:**
   - Patterns discovered (e.g., "this codebase uses X for Y")
   - Gotchas encountered (e.g., "don't forget to update Z when changing W")
