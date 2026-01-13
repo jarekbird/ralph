@@ -1,6 +1,8 @@
 {
   "project": "MyApp",
   "branchName": "ralph/task-priority",
+  "contextFile": "context.md",
+  "logFile": "progress.log",
   "description": "Task Priority System - Add priority levels to tasks",
   "userStories": [
     {

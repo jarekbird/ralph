@@ -130,9 +130,31 @@ fi
 PRD_DIR="$(cd "$(dirname "$PRD_FILE")" && pwd)"
 # Force create PRD directory if it doesn't exist (shouldn't happen, but be safe)
 mkdir -p "$PRD_DIR"
-PROGRESS_FILE="$PRD_DIR/progress.txt"
 ARCHIVE_DIR="$PRD_DIR/archive"
 LAST_BRANCH_FILE="$PRD_DIR/.last-branch"
+
+# Resolve context + log files (relative to PRD directory by default)
+CONTEXT_FILE_NAME=$(jq -r '.contextFile // empty' "$PRD_FILE" 2>/dev/null || echo "")
+LOG_FILE_NAME=$(jq -r '.logFile // empty' "$PRD_FILE" 2>/dev/null || echo "")
+
+if [[ -z "$CONTEXT_FILE_NAME" ]]; then
+  CONTEXT_FILE_NAME="context.md"
+fi
+if [[ -z "$LOG_FILE_NAME" ]]; then
+  LOG_FILE_NAME="progress.log"
+fi
+
+if [[ "$CONTEXT_FILE_NAME" = /* ]]; then
+  CONTEXT_FILE="$CONTEXT_FILE_NAME"
+else
+  CONTEXT_FILE="$PRD_DIR/$CONTEXT_FILE_NAME"
+fi
+
+if [[ "$LOG_FILE_NAME" = /* ]]; then
+  LOG_FILE="$LOG_FILE_NAME"
+else
+  LOG_FILE="$PRD_DIR/$LOG_FILE_NAME"
+fi
 
 # Archive previous run if branch changed
 if [ -f "$PRD_FILE" ] && [ -f "$LAST_BRANCH_FILE" ]; then
@@ -149,13 +171,23 @@ if [ -f "$PRD_FILE" ] && [ -f "$LAST_BRANCH_FILE" ]; then
     echo "Archiving previous run: $LAST_BRANCH"
     mkdir -p "$ARCHIVE_FOLDER"
     [ -f "$PRD_FILE" ] && cp "$PRD_FILE" "$ARCHIVE_FOLDER/"
-    [ -f "$PROGRESS_FILE" ] && cp "$PROGRESS_FILE" "$ARCHIVE_FOLDER/"
+    [ -f "$CONTEXT_FILE" ] && cp "$CONTEXT_FILE" "$ARCHIVE_FOLDER/"
+    [ -f "$LOG_FILE" ] && cp "$LOG_FILE" "$ARCHIVE_FOLDER/"
     echo "   Archived to: $ARCHIVE_FOLDER"
     
-    # Reset progress file for new run
-    echo "# Ralph Progress Log" > "$PROGRESS_FILE"
-    echo "Started: $(date)" >> "$PROGRESS_FILE"
-    echo "---" >> "$PROGRESS_FILE"
+    # Reset context + log for new run
+    cat > "$CONTEXT_FILE" << EOF
+# Ralph Context
+
+## Codebase Patterns
+
+## Notes
+- Started: $(date)
+EOF
+
+    echo "# Ralph Run Log" > "$LOG_FILE"
+    echo "Started: $(date)" >> "$LOG_FILE"
+    echo "---" >> "$LOG_FILE"
   fi
 fi
 
@@ -167,19 +199,31 @@ if [ -f "$PRD_FILE" ]; then
   fi
 fi
 
-# Force create and initialize progress file in PRD directory
-# Always ensure it exists (the AI agent will append to it)
-if [ ! -f "$PROGRESS_FILE" ]; then
-  echo "# Ralph Progress Log" > "$PROGRESS_FILE"
-  echo "Started: $(date)" >> "$PROGRESS_FILE"
-  echo "---" >> "$PROGRESS_FILE"
+# Force create and initialize context + log files
+# Always ensure they exist (the AI agent will append/update them)
+if [ ! -f "$CONTEXT_FILE" ]; then
+  cat > "$CONTEXT_FILE" << EOF
+# Ralph Context
+
+## Codebase Patterns
+
+## Notes
+- Started: $(date)
+EOF
+fi
+
+if [ ! -f "$LOG_FILE" ]; then
+  echo "# Ralph Run Log" > "$LOG_FILE"
+  echo "Started: $(date)" >> "$LOG_FILE"
+  echo "---" >> "$LOG_FILE"
 fi
 
 echo "Starting Ralph - Max iterations: $MAX_ITERATIONS"
 echo "Worker: $WORKER"
 echo "PRD file: $PRD_FILE"
 echo "Workspace: $WORKSPACE_DIR"
-echo "Progress file: $PROGRESS_FILE"
+echo "Context file: $CONTEXT_FILE"
+echo "Log file: $LOG_FILE"
 if [[ "$WORKER" == "cursor" ]]; then
   echo "Cursor model: $CURSOR_MODEL"
   if [[ -z "${CURSOR_API_KEY:-}" ]]; then
@@ -242,5 +286,5 @@ done
 
 echo ""
 echo "Ralph reached max iterations ($MAX_ITERATIONS) without completing all tasks."
-echo "Check $PROGRESS_FILE for status."
+echo "Check $LOG_FILE for status."
 exit 1

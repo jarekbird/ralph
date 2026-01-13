@@ -5,7 +5,7 @@ You are an autonomous coding agent working on a software project using Cursor.
 ## Your Task
 
 1. Read the PRD at `prd.json` (in the same directory as this file)
-2. Read the progress log at `progress.txt` (check Codebase Patterns section first)
+2. Read the shared context file specified by PRD `contextFile` (relative to the PRD directory; default `context.md`)
 3. Determine which repository/repositories this story touches. If multiple repos are involved, you MUST perform ALL git operations in EACH touched repo (see Multi-Repository Work below).
 4. Check you're on the correct branch from PRD `branchName` in every touched repo. If not, check it out or create from main. You may assume the branch name is the same across all repos.
 5. Pick the **highest priority** user story where `passes: false`
@@ -14,7 +14,8 @@ You are an autonomous coding agent working on a software project using Cursor.
 8. Update AGENTS.md files if you discover reusable patterns (see below)
 9. If checks pass, commit changes in EACH touched repo that has changes with message: `feat: [Story ID] - [Story Title]` (do not create empty commits). If your workflow expects pushes, push the branch in each touched repo.
 10. Update the PRD to set `passes: true` for the completed story
-11. Append your progress to `progress.txt`
+11. Write your per-iteration progress output to the log file specified by PRD `logFile` (relative to the PRD directory; default `progress.log`)
+12. Add any learnings / reusable patterns to the shared context file specified by PRD `contextFile`
 
 ## Multi-Repository Work
 
@@ -31,7 +32,7 @@ Some stories may operate across multiple repositories. When that happens:
 
 ## Progress Report Format
 
-APPEND to progress.txt (never replace, always append):
+APPEND to the file specified by PRD `logFile` (never replace, always append):
 ```
 ## [Date/Time] - [Story ID]
 - What was implemented
@@ -44,11 +45,23 @@ APPEND to progress.txt (never replace, always append):
 ---
 ```
 
-The learnings section is critical - it helps future iterations avoid repeating mistakes and understand the codebase better.
+The progress log is for **verbose, story-specific run output** (what changed, what you ran, what you verified).
+
+The learnings section is critical — but remember: only the shared context file (PRD `contextFile`) is intended to be carried across iterations.
+
+After writing your progress report to the log file (PRD `logFile`, typically `*.progress.log`), copy any **durable, reusable** learnings into the shared context file (PRD `contextFile`, typically `*.context.md`).
+
+## Keep the Shared Context Slim (Critical)
+
+The shared context file must stay **high-signal and compact**:
+
+- Prefer short bullets over prose.
+- Keep only durable patterns, conventions, and facts that future iterations will reuse.
+- Remove/avoid story-specific details, timelines, or one-off debugging notes (those belong only in the progress log).
 
 ## Consolidate Patterns
 
-If you discover a **reusable pattern** that future iterations should know, add it to the `## Codebase Patterns` section at the TOP of progress.txt (create it if it doesn't exist). This section should consolidate the most important learnings:
+If you discover a **reusable pattern** that future iterations should know, add it to the `## Codebase Patterns` section at the TOP of the shared context file (PRD `contextFile`, create it if it doesn't exist). This section should consolidate the most important learnings:
 
 ```
 ## Codebase Patterns
@@ -81,7 +94,7 @@ Before committing, check if any edited files have learnings worth preserving in 
 **Do NOT add:**
 - Story-specific implementation details
 - Temporary debugging notes
-- Information already in progress.txt
+- Information already captured elsewhere
 
 Only update AGENTS.md if you have **genuinely reusable knowledge** that would help future work in that directory.
 
@@ -121,6 +134,6 @@ If there are still stories with `passes: false`, end your response normally (ano
 - Work on ONE story per iteration
 - Commit frequently
 - Keep CI green
-- Read the Codebase Patterns section in progress.txt before starting
+- Read the Codebase Patterns section in the shared context file (PRD `contextFile`) before starting
 - Use Cursor's file editing capabilities to make changes directly
 - Rely on `.cursor/rules/*` files for repository-specific conventions when available

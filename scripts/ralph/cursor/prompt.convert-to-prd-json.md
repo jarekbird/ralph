@@ -12,6 +12,8 @@ Take a PRD (markdown file, typically at `tasks/prd-[feature-name].md`) and conve
 {
   "project": "[Project Name]",
   "branchName": "ralph/[feature-name-kebab-case]",
+  "contextFile": "context.md",
+  "logFile": "progress.log",
   "description": "[Feature description from PRD title/intro]",
   "userStories": [
     {
@@ -30,6 +32,15 @@ Take a PRD (markdown file, typically at `tasks/prd-[feature-name].md`) and conve
   ]
 }
 ```
+
+## Context vs Log (Ralph Memory Model)
+
+Ralph separates durable memory from run output:
+
+- `contextFile` (markdown, e.g. `context.md`): **shared context** carried across iterations. This is where learnings and reusable patterns go.
+- `logFile` (e.g. `progress.log`): append-only **run log** for each iteration's progress report. Future iterations should not rely on reading this.
+
+Both file names are interpreted relative to the directory containing `prd.json`.
 
 ## Story Size: The Number One Rule
 

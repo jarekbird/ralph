@@ -40,6 +40,11 @@ setup_test_env() {
     cp "$CURRENT_SOURCE_DIR/cursor/prompt.cursor.md" "$runner_dir/cursor/prompt.cursor.md"
     cp "$CURRENT_SOURCE_DIR/cursor/prompt.convert-to-prd-json.md" "$runner_dir/cursor/prompt.convert-to-prd-json.md"
     cp "$CURRENT_SOURCE_DIR/cursor/convert-to-prd-json.sh" "$runner_dir/cursor/convert-to-prd-json.sh"
+    # Multi-stage PRD conversion prompts
+    cp "$CURRENT_SOURCE_DIR/cursor/prompt.prd-to-execution-order.md" "$runner_dir/cursor/prompt.prd-to-execution-order.md"
+    cp "$CURRENT_SOURCE_DIR/cursor/prompt.prd-to-context.md" "$runner_dir/cursor/prompt.prd-to-context.md"
+    cp "$CURRENT_SOURCE_DIR/cursor/prompt.execution-order-to-steps.md" "$runner_dir/cursor/prompt.execution-order-to-steps.md"
+    cp "$CURRENT_SOURCE_DIR/cursor/prompt.steps-to-prd-json.md" "$runner_dir/cursor/prompt.steps-to-prd-json.md"
     chmod +x "$runner_dir/ralph.sh"
     chmod +x "$runner_dir/cursor/convert-to-prd-json.sh"
     RALPH_SCRIPT="$runner_dir/ralph.sh"
@@ -74,7 +79,17 @@ EOF
   cat > "$project_dir/bin/cursor" << 'EOF'
 #!/bin/bash
 # Stub cursor binary for testing
-echo "Stub cursor executed with args: $@"
+# Print a safe, grep-friendly summary of flags (do NOT print the full prompt argument).
+MODEL_VALUE=""
+ARGS=("$@")
+for ((i=0; i<${#ARGS[@]}; i++)); do
+  if [[ "${ARGS[$i]}" == "--model" ]]; then
+    MODEL_VALUE="${ARGS[$((i+1))]}"
+    break
+  fi
+done
+# Send flag summary to stderr so callers that redirect stdout (e.g., convert-to-prd-json.sh) still surface it.
+echo "Stub cursor executed with flags: --model ${MODEL_VALUE} --print --force --approve-mcps" >&2
 if [ -t 0 ]; then
   echo "Stub cursor: stdin is a TTY"
 else
@@ -86,7 +101,14 @@ if [[ "$*" == *"--model"* ]] && [[ "$*" == *"--print"* ]] && [[ "$*" == *"--forc
 else
   echo "Stub cursor: WARNING - missing required flags" >&2
 fi
-echo "Some cursor output"
+
+# Emit plausible stage outputs for convert-to-prd-json.sh.
+# IMPORTANT: Avoid printing any '{' or '}' unless returning JSON, or the JSON sanitizer will get confused.
+if [[ "$*" == *"Return ONLY valid JSON"* ]]; then
+  echo '{"project":"TestProject","branchName":"ralph/test","contextFile":"context.md","logFile":"progress.log","description":"Test feature","userStories":[]}'
+else
+  echo "Generated output for stage"
+fi
 EOF
   chmod +x "$project_dir/bin/cursor"
 
@@ -95,6 +117,8 @@ EOF
 {
   "project": "TestProject",
   "branchName": "ralph/test",
+  "contextFile": "context.md",
+  "logFile": "progress.log",
   "description": "Test feature",
   "userStories": [
     {
@@ -110,10 +134,19 @@ EOF
 }
 EOF
 
-  # Create test progress.txt
-  echo "# Ralph Progress Log" > "$RALPH_WORK_DIR/progress.txt"
-  echo "Started: $(date)" >> "$RALPH_WORK_DIR/progress.txt"
-  echo "---" >> "$RALPH_WORK_DIR/progress.txt"
+  # Create test context + log files
+  cat > "$RALPH_WORK_DIR/context.md" << 'EOF'
+# Ralph Context
+
+## Codebase Patterns
+
+## Notes
+- Started: TEST
+EOF
+
+  echo "# Ralph Run Log" > "$RALPH_WORK_DIR/progress.log"
+  echo "Started: TEST" >> "$RALPH_WORK_DIR/progress.log"
+  echo "---" >> "$RALPH_WORK_DIR/progress.log"
 }
 
 cleanup_test_env() {
@@ -255,14 +288,16 @@ EOF
 
 test_progress_append_only() {
   setup_test_env
-  ORIGINAL_CONTENT=$(cat "$RALPH_WORK_DIR/progress.txt")
+  ORIGINAL_CONTEXT=$(cat "$RALPH_WORK_DIR/context.md")
+  ORIGINAL_LOG=$(cat "$RALPH_WORK_DIR/progress.log")
   bash "$RALPH_SCRIPT" 1 >/dev/null 2>&1 || true
-  NEW_CONTENT=$(cat "$RALPH_WORK_DIR/progress.txt")
+  NEW_CONTEXT=$(cat "$RALPH_WORK_DIR/context.md")
+  NEW_LOG=$(cat "$RALPH_WORK_DIR/progress.log")
 
-  if [[ "$NEW_CONTENT" == "$ORIGINAL_CONTENT"* ]]; then
-    echo -e "${GREEN}PASS${NC}: progress.txt is append-only"
+  if [[ "$NEW_CONTEXT" == "$ORIGINAL_CONTEXT"* ]] && [[ "$NEW_LOG" == "$ORIGINAL_LOG"* ]]; then
+    echo -e "${GREEN}PASS${NC}: context.md and progress.log are not overwritten by runner"
   else
-    echo -e "${RED}FAIL${NC}: progress.txt was overwritten"
+    echo -e "${RED}FAIL${NC}: context.md and/or progress.log was overwritten"
     cleanup_test_env
     return 1
   fi
@@ -282,11 +317,11 @@ test_prd_json_parsing_failure() {
 
   rm -f "$RALPH_WORK_DIR/prd.json"
   if bash "$RALPH_SCRIPT" 1 >/dev/null 2>&1; then
-    echo -e "${GREEN}PASS${NC}: Runner handles missing prd.json gracefully"
-  else
-    echo -e "${RED}FAIL${NC}: Runner crashes on missing prd.json"
+    echo -e "${RED}FAIL${NC}: Runner should exit non-zero when prd.json is missing"
     cleanup_test_env
     return 1
+  else
+    echo -e "${GREEN}PASS${NC}: Runner exits non-zero when prd.json is missing"
   fi
 
   cleanup_test_env
