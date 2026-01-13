@@ -2,7 +2,7 @@
 
 ![Ralph](ralph.webp)
 
-Ralph is an autonomous AI agent loop that runs an AI worker (default: [Amp](https://ampcode.com), optional: Cursor CLI) repeatedly until all PRD items are complete. Each iteration is a fresh worker invocation with clean context. Memory persists via git history, `scripts/ralph/progress.txt`, and `scripts/ralph/prd.json`.
+Ralph is an autonomous AI agent loop that runs an AI worker (default: [Amp](https://ampcode.com), optional: Cursor CLI) repeatedly until all PRD items are complete. Each iteration is a fresh worker invocation with clean context. Memory persists via git history, `scripts/ralph/prd.json`, and the shared context file specified by `prd.json` (`contextFile`).
 
 Based on [Geoffrey Huntley's Ralph pattern](https://ghuntley.com/ralph/).
 
@@ -73,13 +73,26 @@ If you use Amp skills, use the Ralph skill to convert the markdown PRD to JSON:
 Load the ralph skill and convert tasks/prd-[feature-name].md to prd.json
 ```
 
-Alternatively, you can convert PRD markdown to `scripts/ralph/prd.json` using the Cursor helper script:
+Alternatively, you can convert PRD markdown to a Ralph `*.prd.json` using the Cursor helper script:
 
 ```bash
 ./scripts/ralph/cursor/convert-to-prd-json.sh tasks/prd-[feature-name].md
 ```
 
-This creates `scripts/ralph/prd.json` with user stories structured for autonomous execution.
+This is a **multi-stage** conversion that generates sidecar planning artifacts next to your input PRD, all with the same base name:
+
+- `<base>.execution-order.md`: dependency-ordered phases with acceptance criteria
+- `<base>.context.md`: slim shared context (durable patterns + facts)
+- `<base>.steps.md`: bite-sized steps with verifiable acceptance criteria (one iteration per step)
+- `<base>.prd.json`: the final `prd.json` for Ralph
+
+Example:
+
+- `dashboard.prd.md`
+- `dashboard.execution-order.md`
+- `dashboard.context.md`
+- `dashboard.steps.md`
+- `dashboard.prd.json`
 
 ### 3. Run Ralph
 
@@ -90,7 +103,7 @@ This creates `scripts/ralph/prd.json` with user stories structured for autonomou
 Default is 10 iterations.
 
 The runner loop will invoke the selected worker repeatedly. The worker prompt instructs it to:
-- Read `scripts/ralph/prd.json` and `scripts/ralph/progress.txt`
+- Read `scripts/ralph/prd.json` and the shared context file specified by `prd.json` (`contextFile`)
 - Implement one story per iteration, run checks, commit, and update `passes: true`
 - Stop by outputting `<promise>COMPLETE</promise>` when all stories pass
 
@@ -113,10 +126,11 @@ Note: `--cursor-timeout` only applies if a `timeout` binary is available on your
 | `scripts/ralph/ralph.sh` | The bash loop that spawns fresh worker invocations |
 | `scripts/ralph/prompt.md` | Instructions given to each Amp iteration |
 | `scripts/ralph/cursor/prompt.cursor.md` | Instructions given to each Cursor iteration |
-| `scripts/ralph/cursor/convert-to-prd-json.sh` | Convert PRD markdown → `scripts/ralph/prd.json` via Cursor CLI |
+| `scripts/ralph/cursor/convert-to-prd-json.sh` | Multi-stage PRD builder (PRD → execution-order → context → steps → `prd.json`) via Cursor CLI |
 | `scripts/ralph/prd.json` | User stories with `passes` status (the task list) |
 | `scripts/ralph/prd.json.example` | Example PRD format for reference |
-| `scripts/ralph/progress.txt` | Append-only learnings for future iterations |
+| `contextFile` (from `prd.json`) | Slim shared context carried across iterations (typically `*.context.md`) |
+| `logFile` (from `prd.json`) | Append-only per-iteration run log (typically `*.progress.log`) |
 | `skills/prd/` | Skill for generating PRDs |
 | `skills/ralph/` | Skill for converting PRDs to JSON |
 | `flowchart/` | Interactive visualization of how Ralph works |
@@ -141,8 +155,8 @@ npm run dev
 
 Each iteration spawns a **new worker invocation** (Amp or Cursor) with clean context. The only memory between iterations is:
 - Git history (commits from previous iterations)
-- `scripts/ralph/progress.txt` (learnings and context)
 - `scripts/ralph/prd.json` (which stories are done)
+- The shared context file specified by `prd.json` (`contextFile`, typically `*.context.md`)
 
 ### Small Tasks
 
@@ -177,7 +191,7 @@ Ralph only works if there are feedback loops:
 
 ### Browser Verification for UI Stories
 
-Frontend stories must include "Verify in browser using dev-browser skill" in acceptance criteria. Ralph will use the dev-browser skill to navigate to the page, interact with the UI, and confirm changes work.
+Frontend stories must include browser verification in acceptance criteria (e.g. `"Verify in browser using browser MCP tools"`). Ralph will use browser MCP tools (when configured) to navigate to the page, interact with the UI, and confirm changes work.
 
 ### Stop Condition
 
@@ -191,8 +205,10 @@ Check current state:
 # See which stories are done
 cat scripts/ralph/prd.json | jq '.userStories[] | {id, title, passes}'
 
-# See learnings from previous iterations
-cat scripts/ralph/progress.txt
+# See shared context and per-iteration progress
+# (file names come from prd.json: contextFile + logFile)
+cat scripts/ralph/context.md
+cat scripts/ralph/progress.log
 
 # Check git history
 git log --oneline -10
