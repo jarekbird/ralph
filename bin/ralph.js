@@ -82,21 +82,13 @@ function handleInit(args) {
     { src: 'scripts/ralph/cursor/convert-to-prd-json.sh', dest: 'scripts/ralph/cursor/convert-to-prd-json.sh', executable: true },
   ];
 
-  // Docker runner (primarily useful for cursor worker; safe to skip if files already exist)
-  const dockerFiles = [
-    { src: 'Dockerfile', dest: 'Dockerfile', executable: false },
-    { src: 'docker-compose.yml', dest: 'docker-compose.yml', executable: false },
-    { src: '.dockerignore', dest: '.dockerignore', executable: false },
-    { src: 'docker/entrypoint.sh', dest: 'docker/entrypoint.sh', executable: true },
-  ];
-
   // Build file list based on worker selection
   let requiredFiles = [...alwaysRequired];
   if (worker === 'amp' || worker === 'both') {
     requiredFiles = [...requiredFiles, ...ampFiles];
   }
   if (worker === 'cursor' || worker === 'both') {
-    requiredFiles = [...requiredFiles, ...cursorFiles, ...dockerFiles];
+    requiredFiles = [...requiredFiles, ...cursorFiles];
   }
 
   const created = [];

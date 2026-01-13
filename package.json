@@ -9,10 +9,6 @@
   "files": [
     "bin/",
     "scripts/",
-    "docker/",
-    "Dockerfile",
-    "docker-compose.yml",
-    ".dockerignore",
     "README.md"
   ],
   "engines": {
