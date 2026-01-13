@@ -1,6 +1,6 @@
 #!/bin/bash
 # Ralph Wiggum - Long-running AI agent loop
-# Usage: ./ralph.sh [max_iterations] [--worker amp|cursor] [--model MODEL] [--prd PATH] [--cursor-timeout SECONDS]
+# Usage: ./ralph.sh [max_iterations] [--worker amp|cursor] [--model MODEL] [--prd PATH] [--workspace PATH] [--cursor-timeout SECONDS]
 #        or set RALPH_WORKER environment variable (amp|cursor)
 #        Default worker is 'amp' if not specified
 #        Default PRD file is scripts/ralph/prd.json if not specified
@@ -15,6 +15,7 @@ CURSOR_TIMEOUT="${RALPH_CURSOR_TIMEOUT:-1800}"  # Default: 30 minutes (in second
 CURSOR_BIN="${RALPH_CURSOR_BIN:-cursor}"
 CURSOR_MODEL="${RALPH_CURSOR_MODEL:-auto}"
 PRD_FILE_ARG=""
+WORKSPACE_DIR_ARG=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -28,6 +29,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --prd)
       PRD_FILE_ARG="$2"
+      shift 2
+      ;;
+    --workspace)
+      WORKSPACE_DIR_ARG="$2"
       shift 2
       ;;
     --cursor-timeout)
@@ -56,6 +61,25 @@ fi
 if [[ "$WORKER" == "cursor" && -z "$CURSOR_MODEL" ]]; then
   echo "Error: --model/--cursor-model cannot be empty when using --worker cursor" >&2
   exit 1
+fi
+
+# Resolve workspace directory (used as the working directory for worker execution).
+# Defaults to the current working directory if not provided.
+WORKSPACE_DIR="${WORKSPACE_DIR_ARG:-${RALPH_WORKSPACE:-}}"
+if [[ -n "$WORKSPACE_DIR" ]]; then
+  if [[ "$WORKSPACE_DIR" = /* ]]; then
+    # Absolute
+    WORKSPACE_DIR="$WORKSPACE_DIR"
+  else
+    # Relative to invocation directory
+    WORKSPACE_DIR="$(cd "$(dirname "$WORKSPACE_DIR")" && pwd)/$(basename "$WORKSPACE_DIR")"
+  fi
+  if [[ ! -d "$WORKSPACE_DIR" ]]; then
+    echo "Error: workspace directory not found: $WORKSPACE_DIR" >&2
+    exit 1
+  fi
+else
+  WORKSPACE_DIR="$(pwd)"
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -154,6 +178,7 @@ fi
 echo "Starting Ralph - Max iterations: $MAX_ITERATIONS"
 echo "Worker: $WORKER"
 echo "PRD file: $PRD_FILE"
+echo "Workspace: $WORKSPACE_DIR"
 echo "Progress file: $PROGRESS_FILE"
 if [[ "$WORKER" == "cursor" ]]; then
   echo "Cursor model: $CURSOR_MODEL"
@@ -178,7 +203,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     # Inject PRD file path into prompt
     PROMPT_FILE="$SCRIPT_DIR/prompt.md"
     PROMPT_TEXT=$(cat "$PROMPT_FILE" | sed "s|Read the PRD at \`prd.json\` (in the same directory as this file)|Read the PRD at \`$PRD_FILE\`|g")
-    OUTPUT=$(echo "$PROMPT_TEXT" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
+    OUTPUT=$( (cd "$WORKSPACE_DIR" && echo "$PROMPT_TEXT" | amp --dangerously-allow-all) 2>&1 | tee /dev/stderr ) || true
   elif [[ "$WORKER" == "cursor" ]]; then
     # Cursor worker: use cursor/prompt.cursor.md and execute cursor CLI
     # Uses non-interactive headless mode with file edits enabled
@@ -192,14 +217,14 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     # Note: MCP cleanup is handled by Cursor CLI itself when processes exit normally
     # If MCP processes are orphaned, they may need manual cleanup (outside scope of this script)
     if command -v timeout >/dev/null 2>&1; then
-      OUTPUT=$(timeout "$CURSOR_TIMEOUT" "$CURSOR_BIN" --model "$CURSOR_MODEL" --print --force --approve-mcps "$PROMPT_TEXT" </dev/null 2>&1 | tee /dev/stderr) || true
+      OUTPUT=$( (cd "$WORKSPACE_DIR" && timeout "$CURSOR_TIMEOUT" "$CURSOR_BIN" --model "$CURSOR_MODEL" --print --force --approve-mcps "$PROMPT_TEXT" </dev/null) 2>&1 | tee /dev/stderr ) || true
       TIMEOUT_EXIT=$?
       if [[ $TIMEOUT_EXIT -eq 124 ]]; then
         echo "Warning: Cursor iteration timed out after ${CURSOR_TIMEOUT} seconds" >&2
       fi
     else
       # Fallback if timeout command is not available
-      OUTPUT=$("$CURSOR_BIN" --model "$CURSOR_MODEL" --print --force --approve-mcps "$PROMPT_TEXT" </dev/null 2>&1 | tee /dev/stderr) || true
+      OUTPUT=$( (cd "$WORKSPACE_DIR" && "$CURSOR_BIN" --model "$CURSOR_MODEL" --print --force --approve-mcps "$PROMPT_TEXT" </dev/null) 2>&1 | tee /dev/stderr ) || true
     fi
   fi
   
