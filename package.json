@@ -1,0 +1,23 @@
+{
+  "name": "@jarekbird/ralph",
+  "version": "0.1.1",
+  "description": "Ralph - Autonomous AI agent loop for Amp and Cursor",
+  "type": "module",
+  "bin": {
+    "ralph": "./bin/ralph.js"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "docker/",
+    "Dockerfile",
+    "docker-compose.yml",
+    ".dockerignore",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
+
