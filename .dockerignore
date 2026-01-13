@@ -1,0 +1,10 @@
+.git
+.DS_Store
+node_modules
+flowchart/node_modules
+flowchart/dist
+flowchart/.vite
+coverage
+dist
+npm-debug.log
+yarn-error.log
