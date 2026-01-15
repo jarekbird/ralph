@@ -5,6 +5,9 @@ You are given a **large, disorganized PRD markdown** file. Your job is to conver
 ## Output Requirements
 
 - Output **ONLY markdown** (no code fences, no commentary).
+- Do NOT include status/preamble text like “Created the file…”, “Saved…”, or similar.
+- Do NOT mention file paths (especially `/workspace/...`) or where you wrote output.
+- Do NOT include git instructions.
 - Produce an ordered list of steps that breaks the PRD into **clear phases** that can later be split into bite-sized work.
 - Each step must include:
   - A short title

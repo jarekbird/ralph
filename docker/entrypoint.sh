@@ -8,6 +8,13 @@ if [[ ! -f "$RALPH_SCRIPT" ]]; then
   exit 1
 fi
 
+# Load environment variables from workspace .env file if it exists
+if [[ -f /workspace/.env ]]; then
+  set -a
+  source /workspace/.env 2>/dev/null || true
+  set +a
+fi
+
 # If caller didn't provide a cursor binary override, and `agent` exists, prefer it.
 # This avoids the Cursor IDE dependency that `cursor` sometimes requires.
 if [[ -z "${RALPH_CURSOR_BIN:-}" ]] && command -v agent >/dev/null 2>&1; then

@@ -6,12 +6,9 @@ services:
     # Set WORKSPACE_DIR to an absolute path when running docker compose.
     volumes:
       - ${WORKSPACE_DIR:-..}:/workspace
-      # Provide Cursor Agent CLI to the container (recommended).
-      # Set CURSOR_AGENT_BIN to the absolute path of your host `agent` binary.
-      # Example (macOS): export CURSOR_AGENT_BIN=/Users/you/.local/bin/agent
-      - ${CURSOR_AGENT_BIN:-/usr/local/bin/agent}:/usr/local/bin/agent:ro
     environment:
+      # CURSOR_API_KEY will be read from workspace .env file if present
       - CURSOR_API_KEY
-      # Default to the mounted agent binary unless overridden at runtime
+      # Default to agent binary installed in image
       - RALPH_CURSOR_BIN=agent
     working_dir: /workspace

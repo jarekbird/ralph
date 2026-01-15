@@ -5,6 +5,9 @@ You are extracting **shared context** that will be reused across many iterations
 ## Output Requirements
 
 - Output **ONLY markdown** (no code fences, no commentary).
+- Do NOT include status/preamble text like “Created the file…”, “Saved…”, or similar.
+- Do NOT mention file paths (especially `/workspace/...`) or where you wrote output.
+- Do NOT include git instructions.
 - Keep it **as concise as possible**, but include all stable shared context needed across steps.
 - Prefer **facts and decisions** over prose.
 - Do NOT include step-by-step instructions (those belong in the steps file).

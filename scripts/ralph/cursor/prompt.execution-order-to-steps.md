@@ -10,6 +10,9 @@ Your job is to produce a `.steps.md` file: an **ordered list of bite-sized steps
 ## Output Requirements
 
 - Output **ONLY markdown** (no code fences, no commentary).
+- Do NOT include status/preamble text like “Created the file…”, “Saved…”, or similar.
+- Do NOT mention file paths (especially `/workspace/...`) or where you wrote output.
+- Do NOT include git instructions.
 - Each step must be describable in **a few sentences** (2–5).
 - Each step must be **small enough to complete in one Ralph iteration** (one context window).
 - Each step must include:

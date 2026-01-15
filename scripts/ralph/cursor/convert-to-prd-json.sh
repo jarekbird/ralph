@@ -17,6 +17,27 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Load environment variables from .env file if it exists (in workspace root)
+# Look for .env in common locations: repo root (parent of scripts/), or current directory
+REPO_ROOT=""
+if [ -f "$SCRIPT_DIR/../../.env" ]; then
+  REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+elif [ -f "$SCRIPT_DIR/../.env" ]; then
+  REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+elif [ -f ".env" ]; then
+  REPO_ROOT="$(pwd)"
+fi
+
+if [ -n "$REPO_ROOT" ] && [ -f "$REPO_ROOT/.env" ]; then
+  # Temporarily disable exit on error to allow .env sourcing
+  set +e
+  # Use set -a to auto-export all variables, source .env, then restore
+  set -a
+  source "$REPO_ROOT/.env" 2>/dev/null
+  set +a
+  set -e
+fi
+
 PRD_MD_FILE=""
 MODEL="${RALPH_CURSOR_MODEL:-gpt-5.2}"
 OUT_JSON=""
@@ -111,6 +132,90 @@ for f in "$PROMPT_EXEC_ORDER_FILE" "$PROMPT_CONTEXT_FILE" "$PROMPT_STEPS_FILE" "
   fi
 done
 
+sanitize_and_validate() {
+  # Args: <kind> <in_file> <out_file>
+  # kind: execution_order | context | steps
+  python3 - "$1" "$2" "$3" <<'PY'
+import re, sys
+
+kind, src, dst = sys.argv[1], sys.argv[2], sys.argv[3]
+raw = open(src, "r", encoding="utf-8", errors="replace").read()
+
+# Remove fenced code blocks entirely (agent sometimes wraps the whole answer).
+raw = re.sub(r"(?ms)^```.*?^```\s*", "", raw)
+
+bad_line_prefixes = (
+  "Created ",
+  "I've created ",
+  "I have created ",
+  "Wrote ",
+  "Saved ",
+  "Here is ",
+  "Here's ",
+  "Output saved",
+  "Return ONLY",
+  "Do not include",
+  "Git commands",
+  "Per the workspace rules",
+  "You should commit",
+  "You should push",
+  "/workspace/",
+)
+
+lines = raw.splitlines()
+clean = []
+for line in lines:
+  stripped = line.strip()
+  if not stripped:
+    clean.append(line)
+    continue
+  if any(stripped.startswith(p) for p in bad_line_prefixes):
+    continue
+  clean.append(line)
+
+# Trim leading/trailing blank lines.
+while clean and not clean[0].strip():
+  clean.pop(0)
+while clean and not clean[-1].strip():
+  clean.pop()
+
+def first_index_where(pred):
+  for i, line in enumerate(clean):
+    if pred(line):
+      return i
+  return None
+
+if kind == "context":
+  idx = first_index_where(lambda l: l.strip() == "# Ralph Context")
+  if idx is not None:
+    clean = clean[idx:]
+elif kind in ("execution_order", "steps"):
+  idx = first_index_where(lambda l: re.match(r"^\s*1\.\s+\S", l))
+  if idx is not None:
+    clean = clean[idx:]
+
+out = "\n".join(clean).rstrip() + "\n"
+open(dst, "w", encoding="utf-8").write(out)
+
+# Validate expected shape to catch bad outputs early.
+def fail(msg):
+  raise SystemExit(msg)
+
+if kind == "context":
+  if not out.lstrip().startswith("# Ralph Context"):
+    fail("must start with '# Ralph Context'")
+  required = ["## Codebase Patterns", "## Domain / Product Context", "## Technical Constraints", "## Notes"]
+  missing = [h for h in required if h not in out]
+  if missing:
+    fail(f"missing required headings: {missing}")
+elif kind in ("execution_order", "steps"):
+  if not re.search(r"(?m)^\s*1\.\s+\S", out):
+    fail("must contain an ordered list starting with '1.'")
+else:
+  fail(f"unknown kind: {kind}")
+PY
+}
+
 run_cursor() {
   # Support multiple Cursor CLI variants:
   # - "agent" binary (Cursor Agent CLI)
@@ -132,7 +237,8 @@ run_stage() {
   local prompt_file="$1"
   local stage_name="$2"
   local out_file="$3"
-  shift 3
+  local out_kind="$4" # execution_order | context | steps
+  shift 4
 
   local prompt_text
   prompt_text="$(
@@ -144,13 +250,20 @@ run_stage() {
     done
     printf "\n"
     printf "## Output\n"
-    printf "Return ONLY the full contents for: %s\n" "$out_file"
+    printf "Return ONLY the full file contents (no preambles, no explanations).\n"
+    printf "Do NOT mention file paths (especially not /workspace/...).\n"
+    printf "Do NOT say you created/wrote/saved a file.\n"
+    printf "Do NOT include git instructions.\n"
     printf "Do not include code fences. Do not include commentary.\n"
   )"
 
   echo ""
   echo "==> Stage: $stage_name"
   echo "    Output: $out_file"
+
+  mkdir -p "$(dirname "$out_file")"
+  # Remove any prior output so we can tell if the agent wrote to disk this run.
+  rm -f "$out_file"
 
   local tmp_file
   tmp_file="$(mktemp)"
@@ -164,13 +277,43 @@ run_stage() {
     exit $exit_code
   fi
 
-  mkdir -p "$(dirname "$out_file")"
-  mv "$tmp_file" "$out_file"
+  # Candidate selection:
+  # - stdout candidate: what the agent printed (captured in tmp_file)
+  # - on-disk candidate: what the agent may have written directly to out_file
+  local stdout_clean disk_clean
+  stdout_clean="$(mktemp)"
+  disk_clean="$(mktemp)"
+
+  local stdout_ok="no"
+  local disk_ok="no"
+
+  if sanitize_and_validate "$out_kind" "$tmp_file" "$stdout_clean" >/dev/null 2>&1; then
+    stdout_ok="yes"
+  fi
+
+  if [[ -f "$out_file" ]]; then
+    if sanitize_and_validate "$out_kind" "$out_file" "$disk_clean" >/dev/null 2>&1; then
+      disk_ok="yes"
+    fi
+  fi
+
+  if [[ "$disk_ok" == "yes" ]]; then
+    mv "$disk_clean" "$out_file"
+  elif [[ "$stdout_ok" == "yes" ]]; then
+    mv "$stdout_clean" "$out_file"
+  else
+    echo "Error: invalid output from Cursor Agent for stage '$stage_name' (kind: $out_kind)" >&2
+    echo "  Neither stdout nor on-disk output matched the required shape." >&2
+    rm -f "$stdout_clean" "$disk_clean" "$tmp_file"
+    exit 1
+  fi
+
+  rm -f "$stdout_clean" "$disk_clean" "$tmp_file"
 }
 
-run_stage "$PROMPT_EXEC_ORDER_FILE" "PRD -> execution order" "$EXEC_ORDER_FILE" "$PRD_MD_FILE"
-run_stage "$PROMPT_CONTEXT_FILE" "PRD + execution order -> context" "$CONTEXT_FILE" "$PRD_MD_FILE" "$EXEC_ORDER_FILE"
-run_stage "$PROMPT_STEPS_FILE" "execution order -> steps" "$STEPS_FILE" "$PRD_MD_FILE" "$EXEC_ORDER_FILE" "$CONTEXT_FILE"
+run_stage "$PROMPT_EXEC_ORDER_FILE" "PRD -> execution order" "$EXEC_ORDER_FILE" "execution_order" "$PRD_MD_FILE"
+run_stage "$PROMPT_CONTEXT_FILE" "PRD + execution order -> context" "$CONTEXT_FILE" "context" "$PRD_MD_FILE" "$EXEC_ORDER_FILE"
+run_stage "$PROMPT_STEPS_FILE" "execution order -> steps" "$STEPS_FILE" "steps" "$PRD_MD_FILE" "$EXEC_ORDER_FILE" "$CONTEXT_FILE"
 
 echo ""
 echo "==> Stage: steps -> prd.json"
@@ -185,12 +328,16 @@ PROMPT_TEXT_JSON="$(
   printf -- "- Format reference: %s\n" "$EXAMPLE_FILE"
   printf "\n"
   printf "## Output\n"
-  printf "Return ONLY valid JSON for: %s\n" "$OUT_JSON"
+  printf "Return ONLY valid JSON (no preambles, no explanations).\n"
+  printf "Do NOT mention file paths (especially not /workspace/...).\n"
+  printf "Do NOT say you created/wrote/saved a file.\n"
+  printf "Do NOT include git instructions.\n"
   printf "Do not include code fences. Do not include commentary.\n"
 )"
 
 TMP_JSON="$(mktemp)"
 set +e
+rm -f "$OUT_JSON"
 run_cursor "$PROMPT_TEXT_JSON" "$TMP_JSON" 2>/dev/stderr
 JSON_EXIT=$?
 set -e
@@ -200,12 +347,23 @@ if [[ $JSON_EXIT -ne 0 ]]; then
   exit $JSON_EXIT
 fi
 
-python3 - <<'PY' "$TMP_JSON" "$OUT_JSON" "$BASE_NAME"
-import json, sys
-src, dst, base_name = sys.argv[1], sys.argv[2], sys.argv[3]
-raw = open(src, "r", encoding="utf-8").read().strip()
+python3 - <<'PY' "$TMP_JSON" "$OUT_JSON"
+import json, os, sys
+
+stdout_src, dst = sys.argv[1], sys.argv[2]
+
+def read(path):
+  return open(path, "r", encoding="utf-8", errors="replace").read().strip()
+
+# Choose candidate: prefer on-disk output if the agent wrote it this run.
+raw = ""
+if dst and os.path.exists(dst):
+  raw = read(dst)
+else:
+  raw = read(stdout_src)
+
 if not raw:
-  raise SystemExit("Error: empty output from Cursor CLI for prd.json")
+  raise SystemExit("Error: empty output from Cursor Agent for prd.json")
 
 # Best-effort: extract first {...} blob if the model added stray text.
 start = raw.find("{")

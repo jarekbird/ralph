@@ -14,6 +14,9 @@ Each story MUST be completable in **one** Ralph iteration (one context window).
 - Output **ONLY valid JSON**.
 - Do NOT include code fences.
 - Do NOT include commentary or trailing notes.
+- Do NOT include status/preamble text like “Created the file…”, “Saved…”, or similar.
+- Do NOT mention file paths (especially `/workspace/...`) or where you wrote output.
+- Do NOT include git instructions.
 
 ## prd.json Format
 
