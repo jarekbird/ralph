@@ -2,10 +2,11 @@
 # Convert PRD markdown -> prd.json using Cursor CLI (multi-stage version).
 #
 # Usage:
-#   ./scripts/ralph/cursor/convert-to-prd-json.sh <path-to-prd-markdown> [--model MODEL] [--out OUT_JSON]
+#   ./scripts/ralph/cursor/convert-to-prd-json.sh <path-to-prd-markdown> [--cursor-model MODEL] [--out OUT_JSON]
+#   (alias: --model MODEL)
 #
 # Defaults:
-# - MODEL: "auto"
+# - MODEL: $RALPH_CURSOR_MODEL, or "gpt-5.2"
 # - OUT_JSON: <same directory as input>/<base>.prd.json
 #
 # Notes:
@@ -17,12 +18,12 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PRD_MD_FILE=""
-MODEL="auto"
+MODEL="${RALPH_CURSOR_MODEL:-gpt-5.2}"
 OUT_JSON=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)
+    --model|--cursor-model)
       MODEL="${2:-}"
       shift 2
       ;;
@@ -47,7 +48,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$PRD_MD_FILE" ]]; then
-  echo "Usage: $0 <path-to-prd-markdown> [--model MODEL] [--out OUT_JSON]" >&2
+  echo "Usage: $0 <path-to-prd-markdown> [--cursor-model MODEL] [--out OUT_JSON]" >&2
+  echo "Tip: these prompts are large; prefer a large model (default: $MODEL)." >&2
+  exit 2
+fi
+
+if [[ -z "$MODEL" ]]; then
+  echo "Error: --cursor-model/--model cannot be empty" >&2
   exit 2
 fi
 
@@ -104,6 +111,23 @@ for f in "$PROMPT_EXEC_ORDER_FILE" "$PROMPT_CONTEXT_FILE" "$PROMPT_STEPS_FILE" "
   fi
 done
 
+run_cursor() {
+  # Support multiple Cursor CLI variants:
+  # - "agent" binary (Cursor Agent CLI)
+  # - "cursor agent" subcommand (some installs)
+  # - "cursor" with flags (legacy/newer interface)
+  local prompt="$1"
+  local out_file="$2"
+
+  if [[ "$CURSOR_BIN" == "agent" ]] || [[ "$(basename "$CURSOR_BIN")" == "agent" ]]; then
+    "$CURSOR_BIN" --print --force --approve-mcps --model "$MODEL" "$prompt" </dev/null > "$out_file"
+  elif "$CURSOR_BIN" --help 2>&1 | grep -q "agent"; then
+    "$CURSOR_BIN" agent --print --force --approve-mcps --model "$MODEL" "$prompt" </dev/null > "$out_file"
+  else
+    "$CURSOR_BIN" --model "$MODEL" --print --force --approve-mcps "$prompt" </dev/null > "$out_file"
+  fi
+}
+
 run_stage() {
   local prompt_file="$1"
   local stage_name="$2"
@@ -131,7 +155,7 @@ run_stage() {
   local tmp_file
   tmp_file="$(mktemp)"
   set +e
-  "$CURSOR_BIN" --model "$MODEL" --print --force --approve-mcps "$prompt_text" </dev/null > "$tmp_file" 2>/dev/stderr
+  run_cursor "$prompt_text" "$tmp_file" 2>/dev/stderr
   local exit_code=$?
   set -e
   if [[ $exit_code -ne 0 ]]; then
@@ -167,7 +191,7 @@ PROMPT_TEXT_JSON="$(
 
 TMP_JSON="$(mktemp)"
 set +e
-"$CURSOR_BIN" --model "$MODEL" --print --force --approve-mcps "$PROMPT_TEXT_JSON" </dev/null > "$TMP_JSON" 2>/dev/stderr
+run_cursor "$PROMPT_TEXT_JSON" "$TMP_JSON" 2>/dev/stderr
 JSON_EXIT=$?
 set -e
 if [[ $JSON_EXIT -ne 0 ]]; then

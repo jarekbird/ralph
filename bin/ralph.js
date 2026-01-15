@@ -79,6 +79,11 @@ function handleInit(args) {
   const cursorFiles = [
     { src: 'scripts/ralph/cursor/prompt.cursor.md', dest: 'scripts/ralph/cursor/prompt.cursor.md', executable: false },
     { src: 'scripts/ralph/cursor/prompt.convert-to-prd-json.md', dest: 'scripts/ralph/cursor/prompt.convert-to-prd-json.md', executable: false },
+    // Multi-stage PRD conversion prompt templates (required by convert-to-prd-json.sh)
+    { src: 'scripts/ralph/cursor/prompt.prd-to-execution-order.md', dest: 'scripts/ralph/cursor/prompt.prd-to-execution-order.md', executable: false },
+    { src: 'scripts/ralph/cursor/prompt.prd-to-context.md', dest: 'scripts/ralph/cursor/prompt.prd-to-context.md', executable: false },
+    { src: 'scripts/ralph/cursor/prompt.execution-order-to-steps.md', dest: 'scripts/ralph/cursor/prompt.execution-order-to-steps.md', executable: false },
+    { src: 'scripts/ralph/cursor/prompt.steps-to-prd-json.md', dest: 'scripts/ralph/cursor/prompt.steps-to-prd-json.md', executable: false },
     { src: 'scripts/ralph/cursor/convert-to-prd-json.sh', dest: 'scripts/ralph/cursor/convert-to-prd-json.sh', executable: true },
   ];
 

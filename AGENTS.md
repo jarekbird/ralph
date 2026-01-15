@@ -28,7 +28,8 @@ cd flowchart && npm run build
 - `scripts/ralph/cursor/convert-to-prd-json.sh` - Convert PRD markdown → `scripts/ralph/prd.json` via Cursor CLI
 - `scripts/ralph/prd.json.example` - Example PRD format
 - `scripts/ralph/prd.json` - User stories with `passes` status (the task list)
-- `scripts/ralph/progress.txt` - Append-only learnings for future iterations
+- `contextFile` (from `scripts/ralph/prd.json`) - Slim shared context carried across iterations (path must be specified in the PRD)
+- `logFile` (from `scripts/ralph/prd.json`) - Append-only per-iteration run log (path must be specified in the PRD)
 - `flowchart/` - Interactive React Flow diagram explaining how Ralph works
 
 ## Flowchart
@@ -45,7 +46,7 @@ npm run dev
 ## Patterns
 
 - Each iteration spawns a fresh worker invocation (Amp or Cursor) with clean context
-- Memory persists via git history, `scripts/ralph/progress.txt`, and `scripts/ralph/prd.json`
+- Memory persists via git history, `scripts/ralph/prd.json`, and the shared context file specified by `prd.json` (`contextFile`)
 - Stories should be small enough to complete in one context window
 - Always update AGENTS.md with discovered patterns for future iterations
 - Cursor-specific prompts are in `scripts/ralph/cursor/` subfolder

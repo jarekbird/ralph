@@ -245,6 +245,85 @@ test_convert_prd_json_model_override() {
   cleanup_test_env
 }
 
+test_cli_init_ports_all_prompts_and_convert_script() {
+  cleanup_test_env
+  rm -rf "$TEST_DIR"
+  mkdir -p "$TEST_DIR/init-project"
+  cd "$TEST_DIR/init-project"
+
+  OUTPUT=$(node "$REPO_ROOT/bin/ralph.js" init --worker both 2>&1 || true)
+
+  local base="scripts/ralph"
+  local cursor_dir="$base/cursor"
+
+  # Base runner files
+  for f in \
+    "$base/ralph.sh" \
+    "$base/prompt.md" \
+    "$base/prd.json.example" \
+    "$cursor_dir/prompt.cursor.md" \
+    "$cursor_dir/prompt.convert-to-prd-json.md" \
+    "$cursor_dir/prompt.prd-to-execution-order.md" \
+    "$cursor_dir/prompt.prd-to-context.md" \
+    "$cursor_dir/prompt.execution-order-to-steps.md" \
+    "$cursor_dir/prompt.steps-to-prd-json.md" \
+    "$cursor_dir/convert-to-prd-json.sh"
+  do
+    if [[ ! -f "$f" ]]; then
+      echo -e "${RED}FAIL${NC}: ralph init did not create required file: $f"
+      echo "Output: $OUTPUT"
+      cleanup_test_env
+      return 1
+    fi
+  done
+
+  if [[ ! -x "$base/ralph.sh" ]]; then
+    echo -e "${RED}FAIL${NC}: ralph.sh is not executable after init"
+    cleanup_test_env
+    return 1
+  fi
+  if [[ ! -x "$cursor_dir/convert-to-prd-json.sh" ]]; then
+    echo -e "${RED}FAIL${NC}: convert-to-prd-json.sh is not executable after init"
+    cleanup_test_env
+    return 1
+  fi
+
+  echo -e "${GREEN}PASS${NC}: ralph init ports all prompts + convert-to-prd-json.sh"
+  cleanup_test_env
+}
+
+test_cli_init_force_overwrites() {
+  cleanup_test_env
+  rm -rf "$TEST_DIR"
+  mkdir -p "$TEST_DIR/init-project"
+  cd "$TEST_DIR/init-project"
+
+  # First init
+  node "$REPO_ROOT/bin/ralph.js" init --worker both >/dev/null 2>&1 || true
+
+  # Modify a file
+  echo "OLD_CONTENT" > scripts/ralph/ralph.sh
+
+  # Without --force, should skip overwrite
+  node "$REPO_ROOT/bin/ralph.js" init --worker both >/dev/null 2>&1 || true
+  if ! grep -q "OLD_CONTENT" scripts/ralph/ralph.sh; then
+    echo -e "${RED}FAIL${NC}: ralph init overwrote existing file without --force"
+    cleanup_test_env
+    return 1
+  fi
+
+  # With --force, should overwrite
+  node "$REPO_ROOT/bin/ralph.js" init --worker both --force >/dev/null 2>&1 || true
+  if grep -q "OLD_CONTENT" scripts/ralph/ralph.sh; then
+    echo -e "${RED}FAIL${NC}: ralph init --force did not overwrite existing file"
+    cleanup_test_env
+    return 1
+  fi
+
+  echo -e "${GREEN}PASS${NC}: ralph init --force overwrites existing files"
+  cleanup_test_env
+}
+
 test_stop_condition_complete() {
   setup_test_env
   cat > "$TEST_DIR/project/bin/amp" << 'EOF'
@@ -308,11 +387,11 @@ test_prd_json_parsing_failure() {
   setup_test_env
   echo "invalid json content" > "$RALPH_WORK_DIR/prd.json"
   if bash "$RALPH_SCRIPT" 1 >/dev/null 2>&1; then
-    echo -e "${GREEN}PASS${NC}: Runner handles invalid prd.json gracefully"
-  else
-    echo -e "${RED}FAIL${NC}: Runner crashes on invalid prd.json"
+    echo -e "${RED}FAIL${NC}: Runner should exit non-zero when prd.json is invalid"
     cleanup_test_env
     return 1
+  else
+    echo -e "${GREEN}PASS${NC}: Runner exits non-zero when prd.json is invalid"
   fi
 
   rm -f "$RALPH_WORK_DIR/prd.json"
@@ -371,6 +450,8 @@ run_variant() {
 main() {
   # Test canonical scripts (scripts/ralph/)
   run_variant "scripts" "scripts" "$REPO_ROOT/scripts/ralph"
+  test_cli_init_ports_all_prompts_and_convert_script
+  test_cli_init_force_overwrites
   exit $?
 }
 

@@ -5,7 +5,8 @@ You are an autonomous coding agent working on a software project.
 ## Your Task
 
 1. Read the PRD at `prd.json` (in the same directory as this file)
-2. Read the shared context file specified by PRD `contextFile` (relative to the PRD directory; default `context.md`)
+2. Read the shared context file specified by PRD `contextFile` (relative to the PRD directory)
+   - IMPORTANT: Do not create/read any other context files; only use the PRD’s `contextFile`.
 3. Determine which repository/repositories this story touches. If multiple repos are involved, you MUST perform ALL git operations in EACH touched repo (see Multi-Repository Work below).
 4. Check you're on the correct branch from PRD `branchName` in every touched repo. If not, check it out or create from main. You may assume the branch name is the same across all repos.
 5. Pick the **highest priority** user story where `passes: false`
@@ -14,8 +15,9 @@ You are an autonomous coding agent working on a software project.
 8. Update AGENTS.md files if you discover reusable patterns (see below)
 9. If checks pass, commit changes in EACH touched repo that has changes with message: `feat: [Story ID] - [Story Title]` (do not create empty commits). If your workflow expects pushes, push the branch in each touched repo.
 10. Update the PRD to set `passes: true` for the completed story
-11. Write your per-iteration progress output to the log file specified by PRD `logFile` (relative to the PRD directory; default `progress.log`)
-12. Add any learnings / reusable patterns to the shared context file specified by PRD `contextFile`
+11. Write your per-iteration progress output to the log file specified by PRD `logFile` (relative to the PRD directory)
+   - IMPORTANT: Do not create/write any other log files; only use the PRD’s `logFile`.
+12. Add any learnings / reusable patterns to the shared context file specified by PRD `contextFile` (and only that file)
 
 ## Multi-Repository Work
 

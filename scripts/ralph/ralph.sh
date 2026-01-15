@@ -4,9 +4,27 @@
 #        or set RALPH_WORKER environment variable (amp|cursor)
 #        Default worker is 'amp' if not specified
 #        Default PRD file is scripts/ralph/prd.json if not specified
-#        Convenience: positional .json argument is treated as PRD path
+#        Note: context/log files are read ONLY from the PRD (contextFile/logFile). Do not pass them as args.
 
 set -e
+
+# Helpers
+usage() {
+  cat <<'EOF'
+Usage: ./ralph.sh [max_iterations] [--worker amp|cursor] [--model MODEL] [--prd PATH] [--workspace PATH] [--cursor-timeout SECONDS]
+
+Notes:
+- Ralph reads the context + log file paths ONLY from the PRD JSON fields: contextFile, logFile.
+- Do not pass log/context/other parameter files as CLI args.
+EOF
+}
+
+die() {
+  echo "Error: $*" >&2
+  echo "" >&2
+  usage >&2
+  exit 2
+}
 
 # Parse arguments
 MAX_ITERATIONS=10
@@ -16,35 +34,49 @@ CURSOR_BIN="${RALPH_CURSOR_BIN:-cursor}"
 CURSOR_MODEL="${RALPH_CURSOR_MODEL:-auto}"
 PRD_FILE_ARG=""
 WORKSPACE_DIR_ARG=""
+MAX_ITERATIONS_SET=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
+    -h|--help)
+      usage
+      exit 0
+      ;;
     --worker)
+      [[ -n "${2:-}" ]] || die "--worker requires a value (amp|cursor)"
       WORKER="$2"
       shift 2
       ;;
     --model|--cursor-model)
+      [[ -n "${2:-}" ]] || die "--model/--cursor-model requires a value"
       CURSOR_MODEL="$2"
       shift 2
       ;;
     --prd)
+      [[ -n "${2:-}" ]] || die "--prd requires a path to a PRD JSON file"
       PRD_FILE_ARG="$2"
       shift 2
       ;;
     --workspace)
+      [[ -n "${2:-}" ]] || die "--workspace requires a directory path"
       WORKSPACE_DIR_ARG="$2"
       shift 2
       ;;
     --cursor-timeout)
+      [[ -n "${2:-}" ]] || die "--cursor-timeout requires a number of seconds"
       CURSOR_TIMEOUT="$2"
       shift 2
       ;;
     *)
       if [[ "$1" =~ ^[0-9]+$ ]]; then
+        [[ -z "$MAX_ITERATIONS_SET" ]] || die "max_iterations specified more than once (got: $1)"
         MAX_ITERATIONS="$1"
+        MAX_ITERATIONS_SET="yes"
       elif [[ -z "$PRD_FILE_ARG" && ( "$1" == *.json || "$1" == *.JSON ) ]]; then
-        # Convenience positional: treat a .json arg as PRD path
+        # Convenience positional: treat a single .json arg as PRD path
         PRD_FILE_ARG="$1"
+      else
+        die "unexpected argument: $1"
       fi
       shift
       ;;
@@ -107,7 +139,7 @@ fi
 
 # Determine PRD file path
 if [[ -n "$PRD_FILE_ARG" ]]; then
-  # If --prd-file is provided, resolve it (supports relative and absolute paths)
+  # If --prd is provided, resolve it (supports relative and absolute paths)
   if [[ "$PRD_FILE_ARG" = /* ]]; then
     # Absolute path
     PRD_FILE="$PRD_FILE_ARG"
@@ -126,6 +158,12 @@ if [[ ! -f "$PRD_FILE" ]]; then
   exit 1
 fi
 
+# Require jq (used to read PRD fields)
+if ! command -v jq >/dev/null 2>&1; then
+  echo "Error: jq is required but was not found in PATH." >&2
+  exit 1
+fi
+
 # Store progress/archive files in the PRD file's directory (allows multiple PRDs per repo)
 PRD_DIR="$(cd "$(dirname "$PRD_FILE")" && pwd)"
 # Force create PRD directory if it doesn't exist (shouldn't happen, but be safe)
@@ -134,14 +172,22 @@ ARCHIVE_DIR="$PRD_DIR/archive"
 LAST_BRANCH_FILE="$PRD_DIR/.last-branch"
 
 # Resolve context + log files (relative to PRD directory by default)
-CONTEXT_FILE_NAME=$(jq -r '.contextFile // empty' "$PRD_FILE" 2>/dev/null || echo "")
-LOG_FILE_NAME=$(jq -r '.logFile // empty' "$PRD_FILE" 2>/dev/null || echo "")
+CONTEXT_FILE_NAME="$(jq -er '.contextFile' "$PRD_FILE" 2>/dev/null)" || {
+  echo "Error: PRD is missing required field: contextFile" >&2
+  exit 1
+}
+LOG_FILE_NAME="$(jq -er '.logFile' "$PRD_FILE" 2>/dev/null)" || {
+  echo "Error: PRD is missing required field: logFile" >&2
+  exit 1
+}
 
-if [[ -z "$CONTEXT_FILE_NAME" ]]; then
-  CONTEXT_FILE_NAME="context.md"
+if [[ -z "$CONTEXT_FILE_NAME" || "$CONTEXT_FILE_NAME" == "null" ]]; then
+  echo "Error: PRD field contextFile must be a non-empty string" >&2
+  exit 1
 fi
-if [[ -z "$LOG_FILE_NAME" ]]; then
-  LOG_FILE_NAME="progress.log"
+if [[ -z "$LOG_FILE_NAME" || "$LOG_FILE_NAME" == "null" ]]; then
+  echo "Error: PRD field logFile must be a non-empty string" >&2
+  exit 1
 fi
 
 if [[ "$CONTEXT_FILE_NAME" = /* ]]; then
@@ -272,6 +318,14 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     fi
   fi
   
+  # Always append raw worker output to the PRD-specified log file for auditability.
+  {
+    echo ""
+    echo "=== Ralph iteration $i of $MAX_ITERATIONS (worker: $WORKER) @ $(date) ==="
+    printf "%s\n" "$OUTPUT"
+    echo "=== End Ralph iteration $i ==="
+  } >> "$LOG_FILE"
+
   # Check for completion signal
   if echo "$OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
     echo ""
