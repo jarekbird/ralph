@@ -9,15 +9,20 @@ You are an autonomous coding agent working on a software project using Cursor.
    - IMPORTANT: Do not create/read any other context files; only use the PRD’s `contextFile`.
 3. Determine which repository/repositories this story touches. If multiple repos are involved, you MUST perform ALL git operations in EACH touched repo (see Multi-Repository Work below).
 4. Check you're on the correct branch from PRD `branchName` in every touched repo. If not, check it out or create from main. You may assume the branch name is the same across all repos.
-5. Pick the **highest priority** user story where `passes: false`
-6. Implement that single user story
+5. The runner has already selected the stories for this iteration (see the injected `selectedStories`). Do NOT scan the PRD to pick stories.
+6. Implement ALL selected stories in this iteration (up to `selectedCount`).
 7. Run quality checks (e.g., typecheck, lint, test - use whatever your project requires) in each touched repo as appropriate
 8. Update AGENTS.md files if you discover reusable patterns (see below)
 9. If checks pass, commit changes in EACH touched repo that has changes with message: `feat: [Story ID] - [Story Title]` (do not create empty commits). If your workflow expects pushes, push the branch in each touched repo.
 10. Do NOT edit the PRD JSON file and do NOT edit the log file. The runner will handle story selection, PRD updates, and logging.
-11. If you believe the selected story now passes its acceptance criteria, include this exact marker anywhere in your response:
-    - `<ralph_story_pass/>`
-12. If the story does NOT pass yet, omit the marker and explain what’s missing.
+11. For each story the runner selected (see the injected `selectedStories`), include ONE result block anywhere in your response:
+    - `<ralph_story_result id="US-001" passes="true|false">`
+      Your concise notes (what you did, what remains, blockers, key commands/tests run)
+      `</ralph_story_result>`
+    - Set `passes="true"` only when that story now meets its acceptance criteria.
+12. If you absolutely must use a lightweight marker (no notes), you may use:
+    - `<ralph_story_pass id="US-001"/>`
+    - Back-compat (single-story iterations only): `<ralph_story_pass/>`
 13. Add any learnings / reusable patterns to the shared context file specified by PRD `contextFile` (and only that file)
 
 ## Multi-Repository Work

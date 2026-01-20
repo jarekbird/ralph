@@ -33,6 +33,7 @@ CURSOR_TIMEOUT="${RALPH_CURSOR_TIMEOUT:-1800}"  # Default: 30 minutes (in second
 CURSOR_BIN="${RALPH_CURSOR_BIN:-cursor}"
 CURSOR_MODEL="${RALPH_CURSOR_MODEL:-auto}"
 RALPH_LOG_RAW_OUTPUT="${RALPH_LOG_RAW_OUTPUT:-0}" # 1 = append full raw model output to logFile
+STORIES_PER_ITERATION="${RALPH_STORIES_PER_ITERATION:-1}"
 PRD_FILE_ARG=""
 WORKSPACE_DIR_ARG=""
 MAX_ITERATIONS_SET=""
@@ -66,6 +67,11 @@ while [[ $# -gt 0 ]]; do
     --cursor-timeout)
       [[ -n "${2:-}" ]] || die "--cursor-timeout requires a number of seconds"
       CURSOR_TIMEOUT="$2"
+      shift 2
+      ;;
+    --stories-per-iteration)
+      [[ -n "${2:-}" ]] || die "--stories-per-iteration requires a number"
+      STORIES_PER_ITERATION="$2"
       shift 2
       ;;
     *)
@@ -117,6 +123,9 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Git repo root containing the PRD/log/context artifacts (computed after PRD_FILE is resolved).
+ARTIFACT_REPO_ROOT=""
+
 # Load environment variables from .env file if it exists (in repository root)
 # Look for .env in common locations: repo root (parent of scripts/), or current directory
 REPO_ROOT=""
@@ -137,6 +146,46 @@ if [ -n "$REPO_ROOT" ] && [ -f "$REPO_ROOT/.env" ]; then
   set +a
   set -e
 fi
+
+artifact_repo_root_for_file() {
+  # Prints git repo root containing the given path, or empty.
+  local path="$1"
+  git -C "$(dirname "$path")" rev-parse --show-toplevel 2>/dev/null || true
+}
+
+commit_runner_artifacts_if_changed() {
+  # Always commit runner-managed artifacts (PRD/log/context) if they changed.
+  # The agent may commit code changes during the iteration; the runner updates these afterward.
+  local iter="$1"
+  local selected_ids_csv="$2"
+  local prd_update_status="$3"
+
+  local root="$ARTIFACT_REPO_ROOT"
+  [[ -n "$root" ]] || return 0
+  git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+
+  local paths=()
+  [[ -f "$PRD_FILE" ]] && paths+=("$PRD_FILE")
+  [[ -f "$LOG_FILE" ]] && paths+=("$LOG_FILE")
+  [[ -f "$CONTEXT_FILE" ]] && paths+=("$CONTEXT_FILE")
+  [[ ${#paths[@]} -gt 0 ]] || return 0
+
+  if [[ -z "$(git -C "$root" status --porcelain -- "${paths[@]}" 2>/dev/null)" ]]; then
+    return 0
+  fi
+
+  git -C "$root" add -- "${paths[@]}" >/dev/null 2>&1 || return 0
+  if git -C "$root" diff --cached --quiet -- "${paths[@]}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  git -C "$root" commit -- "${paths[@]}" -m "$(cat <<EOF
+chore: ralph artifacts (iter ${iter}${selected_ids_csv:+: ${selected_ids_csv}})
+
+Runner-updated artifacts (PRD/log/context). PRD update: ${prd_update_status}.
+EOF
+)" >/dev/null 2>&1 || true
+}
 
 # Determine PRD file path
 if [[ -n "$PRD_FILE_ARG" ]]; then
@@ -171,8 +220,21 @@ if ! jq -e '.' "$PRD_FILE" >/dev/null 2>&1; then
   exit 1
 fi
 
+# Allow PRD to override stories per iteration (bigger prompt per iteration).
+PRD_STORIES_PER_ITERATION="$(jq -r '.storiesPerIteration // empty' "$PRD_FILE" 2>/dev/null || echo "")"
+if [[ -n "$PRD_STORIES_PER_ITERATION" && "$PRD_STORIES_PER_ITERATION" != "null" ]]; then
+  STORIES_PER_ITERATION="$PRD_STORIES_PER_ITERATION"
+fi
+
+if ! [[ "$STORIES_PER_ITERATION" =~ ^[0-9]+$ ]] || [[ "$STORIES_PER_ITERATION" -lt 1 ]]; then
+  echo "Error: storiesPerIteration must be a positive integer (got: $STORIES_PER_ITERATION)" >&2
+  exit 1
+fi
+
 # Store progress/archive files in the PRD file's directory (allows multiple PRDs per repo)
 PRD_DIR="$(cd "$(dirname "$PRD_FILE")" && pwd)"
+# Compute repo root for artifact commits.
+ARTIFACT_REPO_ROOT="$(artifact_repo_root_for_file "$PRD_FILE")"
 # Force create PRD directory if it doesn't exist (shouldn't happen, but be safe)
 mkdir -p "$PRD_DIR"
 ARCHIVE_DIR="$PRD_DIR/archive"
@@ -297,11 +359,12 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   
   # Select the next story deterministically (avoid LLM scanning large PRDs).
   # If all stories are complete, exit without invoking a worker.
-  SELECT_PAYLOAD="$(python3 "$SCRIPT_DIR/select_next_story.py" --prd "$PRD_FILE" --pretty)"
+  SELECT_PAYLOAD="$(python3 "$SCRIPT_DIR/select_next_story.py" --prd "$PRD_FILE" --pretty --count "$STORIES_PER_ITERATION")"
   REMAINING_STORIES="$(printf "%s" "$SELECT_PAYLOAD" | jq -r '.remainingStories')"
-  SELECTED_STORY_ID="$(printf "%s" "$SELECT_PAYLOAD" | jq -r '.selectedStory.id // empty')"
-  SELECTED_STORY_TITLE="$(printf "%s" "$SELECT_PAYLOAD" | jq -r '.selectedStory.title // empty')"
-  if [[ "$REMAINING_STORIES" == "0" || -z "$SELECTED_STORY_ID" ]]; then
+  SELECTED_IDS_CSV="$(printf "%s" "$SELECT_PAYLOAD" | jq -r '.selectedIds // [] | join(",")')"
+  PRIMARY_STORY_ID="$(printf "%s" "$SELECT_PAYLOAD" | jq -r '.selectedStory.id // empty')"
+  PRIMARY_STORY_TITLE="$(printf "%s" "$SELECT_PAYLOAD" | jq -r '.selectedStory.title // empty')"
+  if [[ "$REMAINING_STORIES" == "0" || -z "$PRIMARY_STORY_ID" ]]; then
     echo ""
     echo "No remaining stories. Ralph is done."
     echo "<promise>COMPLETE</promise>"
@@ -324,10 +387,11 @@ EOF
   # Hard-coded logging: always append a structured entry per iteration.
   {
     echo ""
-    echo "## $(date) - $SELECTED_STORY_ID - $SELECTED_STORY_TITLE"
+    echo "## $(date) - $PRIMARY_STORY_ID - $PRIMARY_STORY_TITLE"
     echo "- Iteration: $i / $MAX_ITERATIONS"
     echo "- Worker: $WORKER"
     echo "- PRD: $PRD_FILE"
+    echo "- Stories in this iteration: $SELECTED_IDS_CSV"
     echo "---"
   } >> "$LOG_FILE"
 
@@ -370,21 +434,74 @@ EOF
     COMPLETE_SIGNAL="yes"
   fi
 
+  # Parse per-story results from model output.
+  # Preferred:
+  #   <ralph_story_result id="US-001" passes="true|false">...</ralph_story_result>
+  # Also supported:
+  #   <ralph_story_pass id="US-001"/>
+  # Back-compat:
+  #   <ralph_story_pass/> (treated as PRIMARY_STORY_ID)
+  STORY_RESULTS_JSON="$(printf "%s" "$OUTPUT" | python3 "$SCRIPT_DIR/parse_story_results.py" --default-id "$PRIMARY_STORY_ID" 2>/dev/null || echo "[]")"
+
   STORY_PASS="no"
-  if echo "$OUTPUT" | grep -Eq "<\s*ralph_story_pass\s*/\s*>"; then
-    STORY_PASS="yes"
+  PASS_IDS_CSV=""
+  NOTES_IDS_CSV=""
+  PRD_UPDATE_STATUS="skipped"
+
+  # Update PRD from story results (passes + notes)
+  UPDATED_PASS_IDS=()
+  UPDATED_NOTE_IDS=()
+  FAILED_UPDATES=()
+
+  # Iterate JSON array via jq (keep shell simple).
+  RESULT_COUNT="$(printf "%s" "$STORY_RESULTS_JSON" | jq -r 'length' 2>/dev/null || echo "0")"
+  if [[ "$RESULT_COUNT" != "0" ]]; then
+    for idx in $(seq 0 $((RESULT_COUNT - 1))); do
+      SID="$(printf "%s" "$STORY_RESULTS_JSON" | jq -r ".[$idx].id // empty" 2>/dev/null || echo "")"
+      PASSES_RAW="$(printf "%s" "$STORY_RESULTS_JSON" | jq -r ".[$idx].passes" 2>/dev/null || echo "null")"
+      NOTES="$(printf "%s" "$STORY_RESULTS_JSON" | jq -r ".[$idx].notes // \"\"" 2>/dev/null || echo "")"
+      [[ -n "$SID" ]] || continue
+
+      if [[ "$PASSES_RAW" == "true" ]]; then
+        STORY_PASS="yes"
+        set +e
+        python3 "$SCRIPT_DIR/update_prd_story_state.py" --prd "$PRD_FILE" --id "$SID" --passes true >/dev/null 2>&1
+        UPDATE_EXIT=$?
+        set -e
+        if [[ $UPDATE_EXIT -eq 0 ]]; then
+          UPDATED_PASS_IDS+=("$SID")
+        else
+          FAILED_UPDATES+=("$SID:passes:$UPDATE_EXIT")
+        fi
+      fi
+
+      if [[ -n "${NOTES// /}" ]]; then
+        set +e
+        printf "%s" "$NOTES" | python3 "$SCRIPT_DIR/update_prd_story_notes.py" --prd "$PRD_FILE" --id "$SID" --append --timestamp >/dev/null 2>&1
+        NOTES_EXIT=$?
+        set -e
+        if [[ $NOTES_EXIT -eq 0 ]]; then
+          UPDATED_NOTE_IDS+=("$SID")
+        else
+          FAILED_UPDATES+=("$SID:notes:$NOTES_EXIT")
+        fi
+      fi
+    done
   fi
 
-  PRD_UPDATE_STATUS="skipped"
-  if [[ "$STORY_PASS" == "yes" ]]; then
-    set +e
-    python3 "$SCRIPT_DIR/update_prd_story_state.py" --prd "$PRD_FILE" --id "$SELECTED_STORY_ID" --passes true >/dev/null 2>&1
-    UPDATE_EXIT=$?
-    set -e
-    if [[ $UPDATE_EXIT -eq 0 ]]; then
-      PRD_UPDATE_STATUS="passes=true"
+  if [[ ${#UPDATED_PASS_IDS[@]} -gt 0 ]]; then
+    PASS_IDS_CSV="$(IFS=,; echo "${UPDATED_PASS_IDS[*]}")"
+  fi
+  if [[ ${#UPDATED_NOTE_IDS[@]} -gt 0 ]]; then
+    NOTES_IDS_CSV="$(IFS=,; echo "${UPDATED_NOTE_IDS[*]}")"
+  fi
+
+  if [[ ${#UPDATED_PASS_IDS[@]} -gt 0 || ${#UPDATED_NOTE_IDS[@]} -gt 0 || ${#FAILED_UPDATES[@]} -gt 0 ]]; then
+    if [[ ${#FAILED_UPDATES[@]} -eq 0 ]]; then
+      PRD_UPDATE_STATUS="ok"
     else
-      PRD_UPDATE_STATUS="error(exit=$UPDATE_EXIT)"
+      FAIL_LIST="$(IFS=,; echo "${FAILED_UPDATES[*]}")"
+      PRD_UPDATE_STATUS="partial(failed=${#FAILED_UPDATES[@]}: $FAIL_LIST)"
     fi
   fi
 
@@ -393,24 +510,16 @@ EOF
   if PROGRESS_TEXT="$(printf "%s" "$OUTPUT" | python3 "$SCRIPT_DIR/extract_tag_block.py" --tag ralph_progress 2>/dev/null)"; then
     LOG_BODY="$PROGRESS_TEXT"
   else
-    LOG_BODY="$(python3 - <<'PY' "$OUTPUT"
-import sys
-s = sys.argv[1]
-# keep logs readable, avoid megabytes per iteration
-max_chars = 4000
-out = s[:max_chars]
-if len(s) > max_chars:
-  out += "\n...[truncated]..."
-print(out.strip())
-PY
-)"
+    LOG_BODY="$(python3 -c 'import sys; s=sys.stdin.read(); max_chars=4000; out=s[:max_chars]; out += \"\\n...[truncated]...\" if len(s)>max_chars else \"\"; print(out.strip())' <<<"$OUTPUT")"
   fi
 
   {
     echo ""
     echo "### Result"
     echo "- Complete signal: $COMPLETE_SIGNAL"
-    echo "- Story pass marker: $STORY_PASS"
+    echo "- Story pass: $STORY_PASS"
+    if [[ -n "$PASS_IDS_CSV" ]]; then echo "- Story pass ids: $PASS_IDS_CSV"; fi
+    if [[ -n "$NOTES_IDS_CSV" ]]; then echo "- Story notes ids: $NOTES_IDS_CSV"; fi
     echo "- PRD update: $PRD_UPDATE_STATUS"
     echo ""
     echo "### Output excerpt"
@@ -422,6 +531,9 @@ PY
     fi
     echo "---"
   } >> "$LOG_FILE"
+
+  # Always commit runner-updated artifacts after post-iteration updates.
+  commit_runner_artifacts_if_changed "$i" "$SELECTED_IDS_CSV" "$PRD_UPDATE_STATUS"
 
   echo "Iteration $i complete. Continuing..."
   sleep 2

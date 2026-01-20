@@ -26,6 +26,15 @@ def _load_json(path: Path) -> Dict[str, Any]:
     return data
 
 
+def _story_priority_key(story: Dict[str, Any], idx: int) -> Tuple[int, int]:
+    priority = story.get("priority", 10**9)
+    try:
+        prio_num = int(priority)
+    except Exception:
+        prio_num = 10**9
+    return prio_num, idx
+
+
 def _pick_next_story(stories: List[Dict[str, Any]]) -> Tuple[Optional[int], Optional[Dict[str, Any]]]:
     """
     Select "highest priority" story where passes == false.
@@ -40,12 +49,8 @@ def _pick_next_story(stories: List[Dict[str, Any]]) -> Tuple[Optional[int], Opti
             continue
         if story.get("passes") is True:
             continue
-        priority = story.get("priority", 10**9)
-        try:
-            prio_num = int(priority)
-        except Exception:
-            prio_num = 10**9
-        candidates.append((prio_num, idx, story))
+        prio_num, list_idx = _story_priority_key(story, idx)
+        candidates.append((prio_num, list_idx, story))
 
     if not candidates:
         return None, None
@@ -55,9 +60,28 @@ def _pick_next_story(stories: List[Dict[str, Any]]) -> Tuple[Optional[int], Opti
     return idx, story
 
 
+def _pick_next_stories(stories: List[Dict[str, Any]], count: int) -> List[Tuple[int, Dict[str, Any]]]:
+    if count <= 0:
+        return []
+    candidates: List[Tuple[int, int, Dict[str, Any]]] = []
+    for idx, story in enumerate(stories):
+        if not isinstance(story, dict):
+            continue
+        if story.get("passes") is True:
+            continue
+        prio_num, list_idx = _story_priority_key(story, idx)
+        candidates.append((prio_num, list_idx, story))
+    candidates.sort(key=lambda t: (t[0], t[1]))
+    picked: List[Tuple[int, Dict[str, Any]]] = []
+    for prio_num, list_idx, story in candidates[:count]:
+        picked.append((list_idx, story))
+    return picked
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Select next story from a Ralph PRD JSON.")
     parser.add_argument("--prd", required=True, help="Path to prd.json (or *.prd.json)")
+    parser.add_argument("--count", type=int, default=1, help="Number of stories to select (default: 1)")
     parser.add_argument("--out", help="Optional path to write selected story JSON")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
     args = parser.parse_args()
@@ -69,7 +93,12 @@ def main() -> int:
     if not isinstance(stories, list):
         raise ValueError("PRD field 'userStories' must be an array")
 
-    idx, story = _pick_next_story(stories)
+    count = max(1, int(args.count or 1))
+    picked = _pick_next_stories(stories, count=count)
+    selected_index = picked[0][0] if picked else None
+    selected_story = picked[0][1] if picked else None
+    selected_stories = [s for _, s in picked]
+    selected_ids = [str(s.get("id")) for s in selected_stories if isinstance(s, dict) and s.get("id")]
 
     remaining = 0
     for s in stories:
@@ -84,8 +113,13 @@ def main() -> int:
         "logFile": prd.get("logFile"),
         "description": prd.get("description"),
         "remainingStories": remaining,
-        "selectedIndex": idx,
-        "selectedStory": story,
+        # Back-compat single-story fields
+        "selectedIndex": selected_index,
+        "selectedStory": selected_story,
+        # Multi-story fields
+        "selectedCount": count,
+        "selectedIds": selected_ids,
+        "selectedStories": selected_stories,
     }
 
     indent = 2 if args.pretty else None

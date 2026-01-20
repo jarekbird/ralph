@@ -4,7 +4,7 @@
  *
  * Commands:
  *   ralph init [--worker amp|cursor|both] [--force] [--cursor-rules] [--cursor-cli]
- *   ralph run [--worker amp|cursor] [--iterations N]
+ *   ralph run [--worker amp|cursor] [--iterations N] [--model MODEL]
  *
  * Init options:
  *   --worker: Install files for 'amp', 'cursor', or 'both' (default: 'both')
@@ -187,6 +187,7 @@ async function handleRun(args) {
   const flags = parseFlags(args);
   const worker = flags.get('--worker') || 'amp';
   const iterations = flags.get('--iterations') || '10';
+  const model = flags.get('--model') || flags.get('--cursor-model');
 
   if (worker !== 'amp' && worker !== 'cursor') {
     console.error(`Error: Worker must be 'amp' or 'cursor' (got: ${worker})`);
@@ -205,7 +206,13 @@ async function handleRun(args) {
   // Execute the runner script with appropriate arguments
   const { spawn } = await import('child_process');
 
-  const child = spawn('bash', [runnerScript, iterations, '--worker', worker], {
+  const runnerArgs = [runnerScript, iterations, '--worker', worker];
+  // Pass model through to ralph.sh (only relevant for cursor worker).
+  if (model) {
+    runnerArgs.push('--model', model);
+  }
+
+  const child = spawn('bash', runnerArgs, {
     stdio: 'inherit',
     cwd: repoRoot,
   });
