@@ -14,10 +14,11 @@ You are an autonomous coding agent working on a software project.
 7. Run quality checks (e.g., typecheck, lint, test - use whatever your project requires) in each touched repo as appropriate
 8. Update AGENTS.md files if you discover reusable patterns (see below)
 9. If checks pass, commit changes in EACH touched repo that has changes with message: `feat: [Story ID] - [Story Title]` (do not create empty commits). If your workflow expects pushes, push the branch in each touched repo.
-10. Update the PRD to set `passes: true` for the completed story
-11. Write your per-iteration progress output to the log file specified by PRD `logFile` (relative to the PRD directory)
-   - IMPORTANT: Do not create/write any other log files; only use the PRD’s `logFile`.
-12. Add any learnings / reusable patterns to the shared context file specified by PRD `contextFile` (and only that file)
+10. Do NOT edit the PRD JSON file and do NOT edit the log file. The runner will handle story selection, PRD updates, and logging.
+11. If you believe the selected story now passes its acceptance criteria, include this exact marker anywhere in your response:
+    - `<ralph_story_pass/>`
+12. If the story does NOT pass yet, omit the marker and explain what’s missing.
+13. Add any learnings / reusable patterns to the shared context file specified by PRD `contextFile` (and only that file)
 
 ## Multi-Repository Work
 
@@ -32,25 +33,9 @@ Some stories may operate across multiple repositories. When that happens:
   - You do not forget any repo that you modified (no “dirty” repo left behind)
   - If pushes are part of the workflow, push in each touched repo
 
-## Progress Report Format
+## Notes
 
-APPEND to the file specified by PRD `logFile` (never replace, always append):
-```
-## [Date/Time] - [Story ID]
-Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
-- What was implemented
-- Files changed
-- Repositories touched (paths)
-- **Learnings for future iterations:**
-  - Patterns discovered (e.g., "this codebase uses X for Y")
-  - Gotchas encountered (e.g., "don't forget to update Z when changing W")
-  - Useful context (e.g., "the evaluation panel is in component X")
----
-```
-
-Include the thread URL so future iterations can use the `read_thread` tool to reference previous work if needed.
-
-The learnings section is critical - but remember: only the shared context file (PRD `contextFile`) is intended to be carried across iterations. After writing your progress report to the log file (PRD `logFile`), copy any durable learnings into the shared context file.
+The runner handles progress logging. Keep your response concise and focused on what you did and what remains.
 
 ## Consolidate Patterns
 

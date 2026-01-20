@@ -32,6 +32,7 @@ WORKER="${RALPH_WORKER:-amp}"
 CURSOR_TIMEOUT="${RALPH_CURSOR_TIMEOUT:-1800}"  # Default: 30 minutes (in seconds)
 CURSOR_BIN="${RALPH_CURSOR_BIN:-cursor}"
 CURSOR_MODEL="${RALPH_CURSOR_MODEL:-auto}"
+RALPH_LOG_RAW_OUTPUT="${RALPH_LOG_RAW_OUTPUT:-0}" # 1 = append full raw model output to logFile
 PRD_FILE_ARG=""
 WORKSPACE_DIR_ARG=""
 MAX_ITERATIONS_SET=""
@@ -164,6 +165,12 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+# Validate PRD is valid JSON early (otherwise jq parse failures look like missing fields)
+if ! jq -e '.' "$PRD_FILE" >/dev/null 2>&1; then
+  echo "Error: PRD file is not valid JSON: $PRD_FILE" >&2
+  exit 1
+fi
+
 # Store progress/archive files in the PRD file's directory (allows multiple PRDs per repo)
 PRD_DIR="$(cd "$(dirname "$PRD_FILE")" && pwd)"
 # Force create PRD directory if it doesn't exist (shouldn't happen, but be safe)
@@ -270,6 +277,7 @@ echo "PRD file: $PRD_FILE"
 echo "Workspace: $WORKSPACE_DIR"
 echo "Context file: $CONTEXT_FILE"
 echo "Log file: $LOG_FILE"
+echo "Log raw output: $RALPH_LOG_RAW_OUTPUT"
 if [[ "$WORKER" == "cursor" ]]; then
   echo "Cursor model: $CURSOR_MODEL"
   if [[ -z "${CURSOR_API_KEY:-}" ]]; then
@@ -287,20 +295,58 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   echo "  Ralph Iteration $i of $MAX_ITERATIONS (Worker: $WORKER)"
   echo "═══════════════════════════════════════════════════════"
   
+  # Select the next story deterministically (avoid LLM scanning large PRDs).
+  # If all stories are complete, exit without invoking a worker.
+  SELECT_PAYLOAD="$(python3 "$SCRIPT_DIR/select_next_story.py" --prd "$PRD_FILE" --pretty)"
+  REMAINING_STORIES="$(printf "%s" "$SELECT_PAYLOAD" | jq -r '.remainingStories')"
+  SELECTED_STORY_ID="$(printf "%s" "$SELECT_PAYLOAD" | jq -r '.selectedStory.id // empty')"
+  SELECTED_STORY_TITLE="$(printf "%s" "$SELECT_PAYLOAD" | jq -r '.selectedStory.title // empty')"
+  if [[ "$REMAINING_STORIES" == "0" || -z "$SELECTED_STORY_ID" ]]; then
+    echo ""
+    echo "No remaining stories. Ralph is done."
+    echo "<promise>COMPLETE</promise>"
+    exit 0
+  fi
+
+  RUNNER_INJECTION="$(
+    cat <<EOF
+---
+## Ralph Runner (auto-generated)
+PRD: $PRD_FILE
+Context file: $CONTEXT_FILE
+Log file: $LOG_FILE
+
+Selected story (implement ONLY this story; do NOT scan PRD to pick a different one):
+$SELECT_PAYLOAD
+EOF
+  )"
+
+  # Hard-coded logging: always append a structured entry per iteration.
+  {
+    echo ""
+    echo "## $(date) - $SELECTED_STORY_ID - $SELECTED_STORY_TITLE"
+    echo "- Iteration: $i / $MAX_ITERATIONS"
+    echo "- Worker: $WORKER"
+    echo "- PRD: $PRD_FILE"
+    echo "---"
+  } >> "$LOG_FILE"
+
   # Select prompt and execute based on worker
   if [[ "$WORKER" == "amp" ]]; then
     # Amp worker: use prompt.md and execute amp
-    # Inject PRD file path into prompt
     PROMPT_FILE="$SCRIPT_DIR/prompt.md"
-    PROMPT_TEXT=$(cat "$PROMPT_FILE" | sed "s|Read the PRD at \`prd.json\` (in the same directory as this file)|Read the PRD at \`$PRD_FILE\`|g")
+    # Override the "read PRD" instruction to avoid scanning large files.
+    PROMPT_TEXT=$(cat "$PROMPT_FILE" | sed "s|Read the PRD at \`prd.json\` (in the same directory as this file)|The runner has already selected the next story from \`$PRD_FILE\`. Do NOT scan the PRD to choose a story.|g")
+    PROMPT_TEXT="$PROMPT_TEXT"$'\n\n'"$RUNNER_INJECTION"
     OUTPUT=$( (cd "$WORKSPACE_DIR" && echo "$PROMPT_TEXT" | amp --dangerously-allow-all) 2>&1 | tee /dev/stderr ) || true
   elif [[ "$WORKER" == "cursor" ]]; then
     # Cursor worker: use cursor/prompt.cursor.md and execute cursor CLI
     # Uses non-interactive headless mode with file edits enabled
     # Always uses normal spawn (never PTY), stdin is closed (no interactive prompts)
     PROMPT_FILE="$SCRIPT_DIR/cursor/prompt.cursor.md"
-    # Inject PRD file path into prompt
-    PROMPT_TEXT=$(cat "$PROMPT_FILE" | sed "s|Read the PRD at \`prd.json\` (in the same directory as this file)|Read the PRD at \`$PRD_FILE\`|g")
+    # Override the "read PRD" instruction to avoid scanning large files.
+    PROMPT_TEXT=$(cat "$PROMPT_FILE" | sed "s|Read the PRD at \`prd.json\` (in the same directory as this file)|The runner has already selected the next story from \`$PRD_FILE\`. Do NOT scan the PRD to choose a story.|g")
+    PROMPT_TEXT="$PROMPT_TEXT"$'\n\n'"$RUNNER_INJECTION"
     # Execute cursor with: --model "$CURSOR_MODEL" --print --force --approve-mcps
     # stdin is automatically closed when using command substitution in bash
     # Per-iteration hard timeout (wall-clock) - kills process if exceeded
@@ -318,22 +364,65 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     fi
   fi
   
-  # Always append raw worker output to the PRD-specified log file for auditability.
+  # Hard-coded logging: append a result section with safe truncation.
+  COMPLETE_SIGNAL="no"
+  if echo "$OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
+    COMPLETE_SIGNAL="yes"
+  fi
+
+  STORY_PASS="no"
+  if echo "$OUTPUT" | grep -Eq "<\s*ralph_story_pass\s*/\s*>"; then
+    STORY_PASS="yes"
+  fi
+
+  PRD_UPDATE_STATUS="skipped"
+  if [[ "$STORY_PASS" == "yes" ]]; then
+    set +e
+    python3 "$SCRIPT_DIR/update_prd_story_state.py" --prd "$PRD_FILE" --id "$SELECTED_STORY_ID" --passes true >/dev/null 2>&1
+    UPDATE_EXIT=$?
+    set -e
+    if [[ $UPDATE_EXIT -eq 0 ]]; then
+      PRD_UPDATE_STATUS="passes=true"
+    else
+      PRD_UPDATE_STATUS="error(exit=$UPDATE_EXIT)"
+    fi
+  fi
+
+  # If the agent included a structured block, prefer it; else fallback to truncated output.
+  LOG_BODY=""
+  if PROGRESS_TEXT="$(printf "%s" "$OUTPUT" | python3 "$SCRIPT_DIR/extract_tag_block.py" --tag ralph_progress 2>/dev/null)"; then
+    LOG_BODY="$PROGRESS_TEXT"
+  else
+    LOG_BODY="$(python3 - <<'PY' "$OUTPUT"
+import sys
+s = sys.argv[1]
+# keep logs readable, avoid megabytes per iteration
+max_chars = 4000
+out = s[:max_chars]
+if len(s) > max_chars:
+  out += "\n...[truncated]..."
+print(out.strip())
+PY
+)"
+  fi
+
   {
     echo ""
-    echo "=== Ralph iteration $i of $MAX_ITERATIONS (worker: $WORKER) @ $(date) ==="
-    printf "%s\n" "$OUTPUT"
-    echo "=== End Ralph iteration $i ==="
+    echo "### Result"
+    echo "- Complete signal: $COMPLETE_SIGNAL"
+    echo "- Story pass marker: $STORY_PASS"
+    echo "- PRD update: $PRD_UPDATE_STATUS"
+    echo ""
+    echo "### Output excerpt"
+    printf "%s\n" "$LOG_BODY"
+    if [[ "$RALPH_LOG_RAW_OUTPUT" == "1" ]]; then
+      echo ""
+      echo "### Raw output (full)"
+      printf "%s\n" "$OUTPUT"
+    fi
+    echo "---"
   } >> "$LOG_FILE"
 
-  # Check for completion signal
-  if echo "$OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
-    echo ""
-    echo "Ralph completed all tasks!"
-    echo "Completed at iteration $i of $MAX_ITERATIONS"
-    exit 0
-  fi
-  
   echo "Iteration $i complete. Continuing..."
   sleep 2
 done
